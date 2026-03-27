@@ -84,7 +84,8 @@
         for (var i = 0; i < flags.length; i++) {
             var flagEl = flags[i];
             var flagId = flagEl.getAttribute('data-flag-id');
-            var flagComment = flagEl.getAttribute('data-flag-comment') || '';
+            var flagCommentEl = flagEl.querySelector('.flag-comment');
+            var flagComment = flagCommentEl ? flagCommentEl.textContent : '';
 
             var item = createFlagItem(flagId, flagComment, flagEl);
             flagList.appendChild(item);
