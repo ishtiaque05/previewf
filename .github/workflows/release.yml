@@ -51,7 +51,7 @@ jobs:
           cd target/${{ matrix.target }}/release
           tar czf ../../../${{ matrix.archive }} previewf
           cd ../../..
-          sha256sum ${{ matrix.archive }} > ${{ matrix.archive }}.sha256
+          shasum -a 256 ${{ matrix.archive }} > ${{ matrix.archive }}.sha256
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
