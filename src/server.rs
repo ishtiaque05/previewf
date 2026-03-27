@@ -135,11 +135,7 @@ pub async fn run(config: ServerConfig) -> Result<(), PreviewError> {
         let tx = reload_tx.clone();
         tokio::spawn(async move {
             match crate::watcher::FileWatcher::new(watcher_path) {
-                Ok((mut fw, mut rx)) => {
-                    if let Err(e) = fw.watch() {
-                        eprintln!("Warning: file watcher failed to start: {e}");
-                        return;
-                    }
+                Ok((_fw, mut rx)) => {
                     loop {
                         match rx.recv().await {
                             Ok(_) => {
@@ -151,7 +147,7 @@ pub async fn run(config: ServerConfig) -> Result<(), PreviewError> {
                     }
                 }
                 Err(e) => {
-                    eprintln!("Warning: could not create file watcher: {e}");
+                    eprintln!("Warning: file watcher failed to start: {e}");
                 }
             }
         });
