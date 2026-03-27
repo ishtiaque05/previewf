@@ -1,0 +1,27 @@
+[package]
+name = "previewf"
+version = "0.1.0"
+edition = "2021"
+description = "Preview and annotate markdown files with inline flags"
+license = "MIT"
+repository = "https://github.com/ishtiaque05/previewf"
+
+[dependencies]
+anyhow = "1"
+axum = { version = "0.8", features = ["ws"] }
+clap = { version = "4", features = ["derive"] }
+comrak = "0.36"
+notify = "8"
+regex = "1"
+rust-embed = "8"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+syntect = "5"
+termimad = "0.30"
+thiserror = "2"
+tokio = { version = "1", features = ["full"] }
+tower-http = { version = "0.6", features = ["cors", "fs"] }
+
+[dev-dependencies]
+insta = { version = "1", features = ["json"] }
+mockall = "0.13"
