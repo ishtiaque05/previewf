@@ -1,12 +1,7 @@
 //! Terminal markdown rendering via termimad.
 
-use std::sync::LazyLock;
-
-use regex::Regex;
+use crate::flags::FLAG_RE;
 use termimad::MadSkin;
-
-static FLAG_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"<flag:(\d+)>Comment:\s*(.+?)</flag>").unwrap());
 
 /// Render markdown content for terminal display.
 pub fn render_terminal(content: &str) -> String {

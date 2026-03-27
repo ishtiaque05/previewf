@@ -9,8 +9,7 @@ async fn test_watcher_detects_file_change() {
     let file_path = dir.path().join("test.md");
     fs::write(&file_path, "# Hello").unwrap();
 
-    let (mut watcher, mut rx) = FileWatcher::new(dir.path().to_path_buf()).unwrap();
-    watcher.watch().unwrap();
+    let (_watcher, mut rx) = FileWatcher::new(dir.path().to_path_buf()).unwrap();
 
     // Modify the file
     tokio::time::sleep(Duration::from_millis(100)).await;

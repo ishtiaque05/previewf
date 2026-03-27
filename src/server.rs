@@ -1,16 +1,21 @@
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
+use axum::body::Body;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{Path as AxumPath, State};
-use axum::http::{header, StatusCode};
+use axum::http::{header, Request as HttpRequest, StatusCode};
+use axum::middleware::{self, Next};
 use axum::response::{Html, IntoResponse, Redirect, Response};
 use axum::routing::{get, post};
 use axum::Router;
 use rust_embed::Embed;
 use serde::Deserialize;
-use tokio::sync::broadcast;
+use tokio::sync::{broadcast, Mutex};
 
 use crate::flags::{extract_flags, inject_flag, FlagReport};
+use crate::html;
 use crate::markdown::render_html;
 use crate::PreviewError;
 
@@ -29,9 +34,23 @@ struct Assets;
 /// Immutable server configuration produced by [`ServerBuilder`].
 #[derive(Clone, Debug)]
 pub struct ServerConfig {
-    pub path: PathBuf,
-    pub port: u16,
-    pub live_reload: bool,
+    path: PathBuf,
+    port: u16,
+    live_reload: bool,
+}
+
+impl ServerConfig {
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    pub fn port(&self) -> u16 {
+        self.port
+    }
+
+    pub fn live_reload(&self) -> bool {
+        self.live_reload
+    }
 }
 
 /// Builder for [`ServerConfig`].
@@ -91,11 +110,26 @@ impl Default for ServerBuilder {
 struct AppState {
     config: ServerConfig,
     reload_tx: broadcast::Sender<()>,
+    file_locks: Arc<Mutex<HashMap<PathBuf, Arc<Mutex<()>>>>>,
 }
 
 // ---------------------------------------------------------------------------
 // Router construction (public for testing)
 // ---------------------------------------------------------------------------
+
+async fn security_headers(request: HttpRequest<Body>, next: Next) -> Response {
+    let mut response = next.run(request).await;
+    let headers = response.headers_mut();
+    headers.insert("X-Content-Type-Options", "nosniff".parse().unwrap());
+    headers.insert("X-Frame-Options", "DENY".parse().unwrap());
+    headers.insert(
+        "Content-Security-Policy",
+        "default-src 'self'; script-src 'self'; style-src 'self' https://fonts.googleapis.com 'unsafe-inline'; font-src 'self' https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self' ws: wss:"
+            .parse()
+            .unwrap(),
+    );
+    response
+}
 
 /// Create the axum [`Router`] for the preview server.
 ///
@@ -106,7 +140,11 @@ pub fn create_router(config: ServerConfig) -> Router {
 }
 
 fn create_router_with_reload(config: ServerConfig, reload_tx: broadcast::Sender<()>) -> Router {
-    let state = AppState { config, reload_tx };
+    let state = AppState {
+        config,
+        reload_tx,
+        file_locks: Arc::new(Mutex::new(HashMap::new())),
+    };
 
     Router::new()
         .route("/", get(index_handler))
@@ -117,6 +155,7 @@ fn create_router_with_reload(config: ServerConfig, reload_tx: broadcast::Sender<
         .route("/ws", get(ws_handler))
         .route("/assets/{*filepath}", get(asset_handler))
         .with_state(state)
+        .layer(middleware::from_fn(security_headers))
 }
 
 // ---------------------------------------------------------------------------
@@ -129,28 +168,22 @@ pub async fn run(config: ServerConfig) -> Result<(), PreviewError> {
     let (reload_tx, _) = broadcast::channel::<()>(16);
 
     // Optionally start the file watcher
-    if config.live_reload {
-        let watcher_path = config.path.clone();
+    if config.live_reload() {
+        let watcher_path = config.path().to_path_buf();
         let tx = reload_tx.clone();
         tokio::spawn(async move {
             match crate::watcher::FileWatcher::new(watcher_path) {
-                Ok((mut fw, mut rx)) => {
-                    if let Err(e) = fw.watch() {
-                        eprintln!("Warning: file watcher failed to start: {e}");
-                        return;
-                    }
-                    loop {
-                        match rx.recv().await {
-                            Ok(_) => {
-                                let _ = tx.send(());
-                            }
-                            Err(broadcast::error::RecvError::Lagged(_)) => continue,
-                            Err(_) => break,
+                Ok((_fw, mut rx)) => loop {
+                    match rx.recv().await {
+                        Ok(_) => {
+                            let _ = tx.send(());
                         }
+                        Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                        Err(_) => break,
                     }
-                }
+                },
                 Err(e) => {
-                    eprintln!("Warning: could not create file watcher: {e}");
+                    eprintln!("Warning: file watcher failed to start: {e}");
                 }
             }
         });
@@ -158,13 +191,13 @@ pub async fn run(config: ServerConfig) -> Result<(), PreviewError> {
 
     let app = create_router_with_reload(config.clone(), reload_tx);
 
-    let addr = format!("0.0.0.0:{}", config.port);
+    let addr = format!("127.0.0.1:{}", config.port());
     let listener = tokio::net::TcpListener::bind(&addr).await?;
 
     eprintln!(
         "previewf serving {} on http://localhost:{}",
-        config.path.display(),
-        config.port
+        config.path().display(),
+        config.port()
     );
 
     axum::serve(listener, app).await?;
@@ -178,7 +211,7 @@ pub async fn run(config: ServerConfig) -> Result<(), PreviewError> {
 
 /// `GET /` — directory listing, or redirect to single file.
 async fn index_handler(State(state): State<AppState>) -> Response {
-    let base = &state.config.path;
+    let base = state.config.path();
 
     // If the path is a single file, redirect to the appropriate viewer.
     if base.is_file() {
@@ -212,7 +245,7 @@ async fn index_handler(State(state): State<AppState>) -> Response {
     let mut file_entries_parts: Vec<String> = Vec::new();
 
     for (name, flag_count) in &md_files {
-        let safe_name = html_escape(name);
+        let safe_name = html::escape(name);
         let badge = if *flag_count > 0 {
             format!(
                 r#"<span class="file-entry-badge has-flags">{} flag{}</span>"#,
@@ -228,7 +261,7 @@ async fn index_handler(State(state): State<AppState>) -> Response {
     }
 
     for name in &html_files {
-        let safe_name = html_escape(name);
+        let safe_name = html::escape(name);
         file_entries_parts.push(format!(
             r#"<a class="file-entry" href="/raw/{safe_name}"><span><span class="file-entry-icon">&#9671;</span><span class="file-entry-name">{safe_name}</span></span><span class="file-entry-badge">(html)</span></a>"#,
         ));
@@ -248,7 +281,7 @@ async fn index_handler(State(state): State<AppState>) -> Response {
         .unwrap_or_else(|| "<html><body>Template missing</body></html>".to_string());
 
     let html = template
-        .replace("{{directory}}", &html_escape(&dir_display))
+        .replace("{{directory}}", &html::escape(&dir_display))
         .replace("{{file_entries}}", &file_entries)
         .replace("{{summary}}", &summary);
 
@@ -260,7 +293,7 @@ async fn view_handler(
     State(state): State<AppState>,
     AxumPath(filepath): AxumPath<String>,
 ) -> Response {
-    let full_path = match resolve_path(&state.config.path, &filepath) {
+    let full_path = match resolve_path(state.config.path(), &filepath) {
         Some(p) => p,
         None => return not_found_response(&filepath),
     };
@@ -284,8 +317,8 @@ async fn view_handler(
     let title = filepath.rsplit('/').next().unwrap_or(&filepath).to_string();
 
     let html = template
-        .replace("{{title}}", &html_escape(&title))
-        .replace("{{filepath}}", &html_escape(&filepath))
+        .replace("{{title}}", &html::escape(&title))
+        .replace("{{filepath}}", &html::escape(&filepath))
         .replace("{{content}}", &rendered);
 
     Html(html).into_response()
@@ -296,7 +329,7 @@ async fn raw_handler(
     State(state): State<AppState>,
     AxumPath(filepath): AxumPath<String>,
 ) -> Response {
-    let full_path = match resolve_path(&state.config.path, &filepath) {
+    let full_path = match resolve_path(state.config.path(), &filepath) {
         Some(p) => p,
         None => return not_found_response(&filepath),
     };
@@ -312,7 +345,7 @@ async fn flags_handler(
     State(state): State<AppState>,
     AxumPath(filepath): AxumPath<String>,
 ) -> Response {
-    let full_path = match resolve_path(&state.config.path, &filepath) {
+    let full_path = match resolve_path(state.config.path(), &filepath) {
         Some(p) => p,
         None => return not_found_response(&filepath),
     };
@@ -352,17 +385,34 @@ async fn flag_handler(
     AxumPath(filepath): AxumPath<String>,
     axum::Json(body): axum::Json<FlagRequest>,
 ) -> Response {
-    let full_path = match resolve_path(&state.config.path, &filepath) {
+    if !is_markdown(&filepath) {
+        return (
+            StatusCode::BAD_REQUEST,
+            "Flags can only be added to markdown files",
+        )
+            .into_response();
+    }
+
+    let full_path = match resolve_path(state.config.path(), &filepath) {
         Some(p) => p,
         None => return not_found_response(&filepath),
     };
+
+    // Acquire per-file lock to prevent concurrent read-modify-write races
+    let file_lock = {
+        let mut locks = state.file_locks.lock().await;
+        locks
+            .entry(full_path.clone())
+            .or_insert_with(|| Arc::new(Mutex::new(())))
+            .clone()
+    };
+    let _guard = file_lock.lock().await;
 
     let content = match std::fs::read_to_string(&full_path) {
         Ok(c) => c,
         Err(_) => return not_found_response(&filepath),
     };
 
-    // Find the line containing the selected text
     let line = content
         .lines()
         .enumerate()
@@ -379,7 +429,7 @@ async fn flag_handler(
     match inject_flag(&content, line, &body.comment) {
         Ok(new_content) => match std::fs::write(&full_path, &new_content) {
             Ok(_) => {
-                let _ = state.reload_tx.send(());
+                // Don't send explicit reload — the file watcher will detect the write
                 (StatusCode::OK, "Flag injected").into_response()
             }
             Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
@@ -470,15 +520,7 @@ fn is_markdown(name: &str) -> bool {
 fn not_found_response(filepath: &str) -> Response {
     (
         StatusCode::NOT_FOUND,
-        format!("File not found: {}", html_escape(filepath)),
+        format!("File not found: {}", html::escape(filepath)),
     )
         .into_response()
-}
-
-fn html_escape(s: &str) -> String {
-    s.replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('"', "&quot;")
-        .replace('\'', "&#39;")
 }
