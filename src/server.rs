@@ -102,8 +102,10 @@ struct AppState {
 /// Exposed publicly so integration tests can drive requests without binding
 /// a TCP listener.
 pub fn create_router(config: ServerConfig) -> Router {
-    let (reload_tx, _) = broadcast::channel::<()>(16);
+    create_router_with_reload(config, broadcast::channel::<()>(16).0)
+}
 
+fn create_router_with_reload(config: ServerConfig, reload_tx: broadcast::Sender<()>) -> Router {
     let state = AppState { config, reload_tx };
 
     Router::new()
@@ -131,8 +133,12 @@ pub async fn run(config: ServerConfig) -> Result<(), PreviewError> {
         let watcher_path = config.path.clone();
         let tx = reload_tx.clone();
         tokio::spawn(async move {
-            if let Ok((mut fw, mut rx)) = crate::watcher::FileWatcher::new(watcher_path) {
-                if fw.watch().is_ok() {
+            match crate::watcher::FileWatcher::new(watcher_path) {
+                Ok((mut fw, mut rx)) => {
+                    if let Err(e) = fw.watch() {
+                        eprintln!("Warning: file watcher failed to start: {e}");
+                        return;
+                    }
                     loop {
                         match rx.recv().await {
                             Ok(_) => {
@@ -143,24 +149,14 @@ pub async fn run(config: ServerConfig) -> Result<(), PreviewError> {
                         }
                     }
                 }
+                Err(e) => {
+                    eprintln!("Warning: could not create file watcher: {e}");
+                }
             }
         });
     }
 
-    let state = AppState {
-        config: config.clone(),
-        reload_tx,
-    };
-
-    let app = Router::new()
-        .route("/", get(index_handler))
-        .route("/view/{*filepath}", get(view_handler))
-        .route("/raw/{*filepath}", get(raw_handler))
-        .route("/flags/{*filepath}", get(flags_handler))
-        .route("/flag/{*filepath}", post(flag_handler))
-        .route("/ws", get(ws_handler))
-        .route("/assets/{*filepath}", get(asset_handler))
-        .with_state(state);
+    let app = create_router_with_reload(config.clone(), reload_tx);
 
     let addr = format!("0.0.0.0:{}", config.port);
     let listener = tokio::net::TcpListener::bind(&addr).await?;
@@ -216,6 +212,7 @@ async fn index_handler(State(state): State<AppState>) -> Response {
     let mut file_entries_parts: Vec<String> = Vec::new();
 
     for (name, flag_count) in &md_files {
+        let safe_name = html_escape(name);
         let badge = if *flag_count > 0 {
             format!(
                 r#"<span class="file-entry-badge has-flags">{} flag{}</span>"#,
@@ -226,13 +223,14 @@ async fn index_handler(State(state): State<AppState>) -> Response {
             r#"<span class="file-entry-badge">&mdash;</span>"#.to_string()
         };
         file_entries_parts.push(format!(
-            r#"<a class="file-entry" href="/view/{name}"><span><span class="file-entry-icon">&#9670;</span><span class="file-entry-name">{name}</span></span>{badge}</a>"#,
+            r#"<a class="file-entry" href="/view/{safe_name}"><span><span class="file-entry-icon">&#9670;</span><span class="file-entry-name">{safe_name}</span></span>{badge}</a>"#,
         ));
     }
 
     for name in &html_files {
+        let safe_name = html_escape(name);
         file_entries_parts.push(format!(
-            r#"<a class="file-entry" href="/raw/{name}"><span><span class="file-entry-icon">&#9671;</span><span class="file-entry-name">{name}</span></span><span class="file-entry-badge">(html)</span></a>"#,
+            r#"<a class="file-entry" href="/raw/{safe_name}"><span><span class="file-entry-icon">&#9671;</span><span class="file-entry-name">{safe_name}</span></span><span class="file-entry-badge">(html)</span></a>"#,
         ));
     }
 
@@ -250,7 +248,7 @@ async fn index_handler(State(state): State<AppState>) -> Response {
         .unwrap_or_else(|| "<html><body>Template missing</body></html>".to_string());
 
     let html = template
-        .replace("{{directory}}", &dir_display)
+        .replace("{{directory}}", &html_escape(&dir_display))
         .replace("{{file_entries}}", &file_entries)
         .replace("{{summary}}", &summary);
 
@@ -262,7 +260,10 @@ async fn view_handler(
     State(state): State<AppState>,
     AxumPath(filepath): AxumPath<String>,
 ) -> Response {
-    let full_path = resolve_path(&state.config.path, &filepath);
+    let full_path = match resolve_path(&state.config.path, &filepath) {
+        Some(p) => p,
+        None => return not_found_response(&filepath),
+    };
 
     let content = match std::fs::read_to_string(&full_path) {
         Ok(c) => c,
@@ -283,8 +284,8 @@ async fn view_handler(
     let title = filepath.rsplit('/').next().unwrap_or(&filepath).to_string();
 
     let html = template
-        .replace("{{title}}", &title)
-        .replace("{{filepath}}", &filepath)
+        .replace("{{title}}", &html_escape(&title))
+        .replace("{{filepath}}", &html_escape(&filepath))
         .replace("{{content}}", &rendered);
 
     Html(html).into_response()
@@ -295,7 +296,10 @@ async fn raw_handler(
     State(state): State<AppState>,
     AxumPath(filepath): AxumPath<String>,
 ) -> Response {
-    let full_path = resolve_path(&state.config.path, &filepath);
+    let full_path = match resolve_path(&state.config.path, &filepath) {
+        Some(p) => p,
+        None => return not_found_response(&filepath),
+    };
 
     match std::fs::read_to_string(&full_path) {
         Ok(content) => Html(content).into_response(),
@@ -308,7 +312,10 @@ async fn flags_handler(
     State(state): State<AppState>,
     AxumPath(filepath): AxumPath<String>,
 ) -> Response {
-    let full_path = resolve_path(&state.config.path, &filepath);
+    let full_path = match resolve_path(&state.config.path, &filepath) {
+        Some(p) => p,
+        None => return not_found_response(&filepath),
+    };
 
     let content = match std::fs::read_to_string(&full_path) {
         Ok(c) => c,
@@ -345,7 +352,10 @@ async fn flag_handler(
     AxumPath(filepath): AxumPath<String>,
     axum::Json(body): axum::Json<FlagRequest>,
 ) -> Response {
-    let full_path = resolve_path(&state.config.path, &filepath);
+    let full_path = match resolve_path(&state.config.path, &filepath) {
+        Some(p) => p,
+        None => return not_found_response(&filepath),
+    };
 
     let content = match std::fs::read_to_string(&full_path) {
         Ok(c) => c,
@@ -433,13 +443,22 @@ async fn asset_handler(AxumPath(filepath): AxumPath<String>) -> Response {
 // ---------------------------------------------------------------------------
 
 /// Resolve a relative filepath against the configured base path.
-fn resolve_path(base: &Path, filepath: &str) -> PathBuf {
+///
+/// Returns `None` if the resolved path escapes the base directory
+/// (path traversal prevention).
+fn resolve_path(base: &Path, filepath: &str) -> Option<PathBuf> {
     if base.is_file() {
-        // When serving a single file, the base is the file itself;
-        // ignore the filepath and return the base directly.
-        base.to_path_buf()
+        return Some(base.to_path_buf());
+    }
+
+    let joined = base.join(filepath);
+    let canonical = std::fs::canonicalize(&joined).ok()?;
+    let base_canonical = std::fs::canonicalize(base).ok()?;
+
+    if canonical.starts_with(&base_canonical) {
+        Some(canonical)
     } else {
-        base.join(filepath)
+        None
     }
 }
 
@@ -451,7 +470,15 @@ fn is_markdown(name: &str) -> bool {
 fn not_found_response(filepath: &str) -> Response {
     (
         StatusCode::NOT_FOUND,
-        format!("File not found: {}", filepath),
+        format!("File not found: {}", html_escape(filepath)),
     )
         .into_response()
+}
+
+fn html_escape(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&#39;")
 }
