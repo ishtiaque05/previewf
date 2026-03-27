@@ -1329,6 +1329,7 @@ dependencies = [
  "comrak",
  "googletest",
  "insta",
+ "mime_guess",
  "mockall",
  "notify",
  "regex",

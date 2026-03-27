@@ -1,1 +1,420 @@
-// Axum web server, routes, and WebSocket handler.
+use std::path::{Path, PathBuf};
+
+use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
+use axum::extract::{Path as AxumPath, State};
+use axum::http::{header, StatusCode};
+use axum::response::{Html, IntoResponse, Redirect, Response};
+use axum::routing::{get, post};
+use axum::Router;
+use rust_embed::Embed;
+use serde::Deserialize;
+use tokio::sync::broadcast;
+
+use crate::flags::{extract_flags, inject_flag, FlagReport};
+use crate::markdown::render_html;
+use crate::PreviewError;
+
+// ---------------------------------------------------------------------------
+// Embedded static assets
+// ---------------------------------------------------------------------------
+
+#[derive(Embed)]
+#[folder = "assets/"]
+struct Assets;
+
+// ---------------------------------------------------------------------------
+// Configuration
+// ---------------------------------------------------------------------------
+
+/// Immutable server configuration produced by [`ServerBuilder`].
+#[derive(Clone, Debug)]
+pub struct ServerConfig {
+    pub path: PathBuf,
+    pub port: u16,
+    pub live_reload: bool,
+}
+
+/// Builder for [`ServerConfig`].
+pub struct ServerBuilder {
+    path: PathBuf,
+    port: u16,
+    live_reload: bool,
+}
+
+impl ServerBuilder {
+    pub fn new() -> Self {
+        Self {
+            path: PathBuf::from("."),
+            port: 3000,
+            live_reload: true,
+        }
+    }
+
+    pub fn path<P: Into<PathBuf>>(mut self, path: P) -> Self {
+        self.path = path.into();
+        self
+    }
+
+    pub fn port(mut self, port: u16) -> Self {
+        self.port = port;
+        self
+    }
+
+    pub fn live_reload(mut self, enabled: bool) -> Self {
+        self.live_reload = enabled;
+        self
+    }
+
+    /// Build the configuration, validating that the path exists.
+    pub fn build(self) -> Result<ServerConfig, PreviewError> {
+        let path = std::fs::canonicalize(&self.path)
+            .map_err(|_| PreviewError::FileNotFound(self.path.clone()))?;
+        Ok(ServerConfig {
+            path,
+            port: self.port,
+            live_reload: self.live_reload,
+        })
+    }
+}
+
+impl Default for ServerBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Shared application state
+// ---------------------------------------------------------------------------
+
+#[derive(Clone)]
+struct AppState {
+    config: ServerConfig,
+    reload_tx: broadcast::Sender<()>,
+}
+
+// ---------------------------------------------------------------------------
+// Router construction (public for testing)
+// ---------------------------------------------------------------------------
+
+/// Create the axum [`Router`] for the preview server.
+///
+/// Exposed publicly so integration tests can drive requests without binding
+/// a TCP listener.
+pub fn create_router(config: ServerConfig) -> Router {
+    let (reload_tx, _) = broadcast::channel::<()>(16);
+
+    let state = AppState { config, reload_tx };
+
+    Router::new()
+        .route("/", get(index_handler))
+        .route("/view/{*filepath}", get(view_handler))
+        .route("/raw/{*filepath}", get(raw_handler))
+        .route("/flags/{*filepath}", get(flags_handler))
+        .route("/flag/{*filepath}", post(flag_handler))
+        .route("/ws", get(ws_handler))
+        .route("/assets/{*filepath}", get(asset_handler))
+        .with_state(state)
+}
+
+// ---------------------------------------------------------------------------
+// `run` — start the server with optional file watcher
+// ---------------------------------------------------------------------------
+
+/// Start the preview server, optionally spawning a file watcher that sends
+/// reload notifications over WebSocket.
+pub async fn run(config: ServerConfig) -> Result<(), PreviewError> {
+    let (reload_tx, _) = broadcast::channel::<()>(16);
+
+    // Optionally start the file watcher
+    if config.live_reload {
+        let watcher_path = config.path.clone();
+        let tx = reload_tx.clone();
+        tokio::spawn(async move {
+            if let Ok((mut fw, mut rx)) = crate::watcher::FileWatcher::new(watcher_path) {
+                if fw.watch().is_ok() {
+                    loop {
+                        match rx.recv().await {
+                            Ok(_) => {
+                                let _ = tx.send(());
+                            }
+                            Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                            Err(_) => break,
+                        }
+                    }
+                }
+            }
+        });
+    }
+
+    let state = AppState {
+        config: config.clone(),
+        reload_tx,
+    };
+
+    let app = Router::new()
+        .route("/", get(index_handler))
+        .route("/view/{*filepath}", get(view_handler))
+        .route("/raw/{*filepath}", get(raw_handler))
+        .route("/flags/{*filepath}", get(flags_handler))
+        .route("/flag/{*filepath}", post(flag_handler))
+        .route("/ws", get(ws_handler))
+        .route("/assets/{*filepath}", get(asset_handler))
+        .with_state(state);
+
+    let addr = format!("0.0.0.0:{}", config.port);
+    let listener = tokio::net::TcpListener::bind(&addr).await?;
+
+    eprintln!(
+        "previewf serving {} on http://localhost:{}",
+        config.path.display(),
+        config.port
+    );
+
+    axum::serve(listener, app).await?;
+
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Route handlers
+// ---------------------------------------------------------------------------
+
+/// `GET /` — directory listing, or redirect to single file.
+async fn index_handler(State(state): State<AppState>) -> Response {
+    let base = &state.config.path;
+
+    // If the path is a single file, redirect to the appropriate viewer.
+    if base.is_file() {
+        let name = base.file_name().unwrap_or_default().to_string_lossy();
+        return if is_markdown(&name) {
+            Redirect::temporary(&format!("/view/{}", name)).into_response()
+        } else {
+            Redirect::temporary(&format!("/raw/{}", name)).into_response()
+        };
+    }
+
+    // Collect eligible files (.md and .html)
+    let mut entries: Vec<(String, &str)> = Vec::new();
+    if let Ok(read_dir) = std::fs::read_dir(base) {
+        for entry in read_dir.flatten() {
+            let name = entry.file_name().to_string_lossy().to_string();
+            if is_markdown(&name) {
+                entries.push((name, "markdown"));
+            } else if name.ends_with(".html") || name.ends_with(".htm") {
+                entries.push((name, "html"));
+            }
+        }
+    }
+    entries.sort_by(|a, b| a.0.to_lowercase().cmp(&b.0.to_lowercase()));
+
+    // Build HTML entries
+    let file_entries: String = entries
+        .iter()
+        .map(|(name, kind)| {
+            let route = if *kind == "markdown" { "view" } else { "raw" };
+            let icon = if *kind == "markdown" { "&#128196;" } else { "&#127760;" };
+            format!(
+                r#"<div class="file-entry"><div class="file-entry-name"><span class="file-entry-icon {kind}">{icon}</span><a href="/{route}/{name}">{name}</a></div><div class="file-entry-meta">{kind}</div></div>"#,
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    let summary = format!("{} file(s)", entries.len());
+    let dir_display = base.display().to_string();
+
+    // Load the index template from embedded assets
+    let template = Assets::get("index.html")
+        .map(|f| String::from_utf8_lossy(&f.data).into_owned())
+        .unwrap_or_else(|| "<html><body>Template missing</body></html>".to_string());
+
+    let html = template
+        .replace("{{directory}}", &dir_display)
+        .replace("{{file_entries}}", &file_entries)
+        .replace("{{summary}}", &summary);
+
+    Html(html).into_response()
+}
+
+/// `GET /view/{*filepath}` — render a markdown file as HTML.
+async fn view_handler(
+    State(state): State<AppState>,
+    AxumPath(filepath): AxumPath<String>,
+) -> Response {
+    let full_path = resolve_path(&state.config.path, &filepath);
+
+    let content = match std::fs::read_to_string(&full_path) {
+        Ok(c) => c,
+        Err(_) => return not_found_response(&filepath),
+    };
+
+    if !is_markdown(&filepath) {
+        return (StatusCode::BAD_REQUEST, "Not a markdown file").into_response();
+    }
+
+    let rendered = render_html(&content);
+
+    // Load the document template
+    let template = Assets::get("document.html")
+        .map(|f| String::from_utf8_lossy(&f.data).into_owned())
+        .unwrap_or_else(|| "<html><body>{{content}}</body></html>".to_string());
+
+    let title = filepath.rsplit('/').next().unwrap_or(&filepath).to_string();
+
+    let html = template
+        .replace("{{title}}", &title)
+        .replace("{{filepath}}", &filepath)
+        .replace("{{content}}", &rendered);
+
+    Html(html).into_response()
+}
+
+/// `GET /raw/{*filepath}` — serve an HTML file as-is.
+async fn raw_handler(
+    State(state): State<AppState>,
+    AxumPath(filepath): AxumPath<String>,
+) -> Response {
+    let full_path = resolve_path(&state.config.path, &filepath);
+
+    match std::fs::read_to_string(&full_path) {
+        Ok(content) => Html(content).into_response(),
+        Err(_) => not_found_response(&filepath),
+    }
+}
+
+/// `GET /flags/{*filepath}` — return flags as JSON.
+async fn flags_handler(
+    State(state): State<AppState>,
+    AxumPath(filepath): AxumPath<String>,
+) -> Response {
+    let full_path = resolve_path(&state.config.path, &filepath);
+
+    let content = match std::fs::read_to_string(&full_path) {
+        Ok(c) => c,
+        Err(_) => return not_found_response(&filepath),
+    };
+
+    let flags = extract_flags(&content);
+    let report = FlagReport {
+        file: filepath,
+        flags,
+    };
+
+    match serde_json::to_string(&report) {
+        Ok(json) => (
+            StatusCode::OK,
+            [(header::CONTENT_TYPE, "application/json")],
+            json,
+        )
+            .into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+/// Request body for flag injection.
+#[derive(Deserialize)]
+struct FlagRequest {
+    line: usize,
+    comment: String,
+}
+
+/// `POST /flag/{*filepath}` — inject a flag into a markdown file.
+async fn flag_handler(
+    State(state): State<AppState>,
+    AxumPath(filepath): AxumPath<String>,
+    axum::Json(body): axum::Json<FlagRequest>,
+) -> Response {
+    let full_path = resolve_path(&state.config.path, &filepath);
+
+    let content = match std::fs::read_to_string(&full_path) {
+        Ok(c) => c,
+        Err(_) => return not_found_response(&filepath),
+    };
+
+    match inject_flag(&content, body.line, &body.comment) {
+        Ok(new_content) => match std::fs::write(&full_path, &new_content) {
+            Ok(_) => (StatusCode::OK, "Flag injected").into_response(),
+            Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        },
+        Err(e) => (StatusCode::BAD_REQUEST, e.to_string()).into_response(),
+    }
+}
+
+/// `GET /ws` — WebSocket endpoint for live reload notifications.
+async fn ws_handler(ws: WebSocketUpgrade, State(state): State<AppState>) -> Response {
+    ws.on_upgrade(move |socket| handle_ws(socket, state))
+}
+
+async fn handle_ws(mut socket: WebSocket, state: AppState) {
+    let mut rx = state.reload_tx.subscribe();
+
+    loop {
+        tokio::select! {
+            result = rx.recv() => {
+                match result {
+                    Ok(()) => {
+                        if socket.send(Message::Text("reload".into())).await.is_err() {
+                            break;
+                        }
+                    }
+                    Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(_) => break,
+                }
+            }
+            msg = socket.recv() => {
+                match msg {
+                    Some(Ok(Message::Close(_))) | None => break,
+                    Some(Err(_)) => break,
+                    _ => {} // ignore other messages
+                }
+            }
+        }
+    }
+}
+
+/// `GET /assets/{*filepath}` — serve embedded static assets.
+async fn asset_handler(AxumPath(filepath): AxumPath<String>) -> Response {
+    match Assets::get(&filepath) {
+        Some(file) => {
+            let mime = mime_guess::from_path(&filepath)
+                .first_or_octet_stream()
+                .to_string();
+            (
+                StatusCode::OK,
+                [(header::CONTENT_TYPE, mime)],
+                file.data.to_vec(),
+            )
+                .into_response()
+        }
+        None => (StatusCode::NOT_FOUND, "Asset not found").into_response(),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+/// Resolve a relative filepath against the configured base path.
+fn resolve_path(base: &Path, filepath: &str) -> PathBuf {
+    if base.is_file() {
+        // When serving a single file, the base is the file itself;
+        // ignore the filepath and return the base directly.
+        base.to_path_buf()
+    } else {
+        base.join(filepath)
+    }
+}
+
+fn is_markdown(name: &str) -> bool {
+    let lower = name.to_lowercase();
+    lower.ends_with(".md") || lower.ends_with(".markdown") || lower.ends_with(".mkd")
+}
+
+fn not_found_response(filepath: &str) -> Response {
+    (
+        StatusCode::NOT_FOUND,
+        format!("File not found: {}", filepath),
+    )
+        .into_response()
+}
