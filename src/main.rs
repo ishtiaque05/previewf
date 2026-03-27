@@ -64,7 +64,11 @@ async fn main() -> Result<()> {
         }
         Commands::View { path } => {
             let name = path.to_string_lossy();
-            anyhow::ensure!(is_markdown(&name), "Not a markdown file: {}", path.display());
+            anyhow::ensure!(
+                is_markdown(&name),
+                "Not a markdown file: {}",
+                path.display()
+            );
 
             let content = std::fs::read_to_string(&path)
                 .with_context(|| format!("Cannot read file: {}", path.display()))?;
@@ -74,7 +78,11 @@ async fn main() -> Result<()> {
         }
         Commands::Flags { path, json } => {
             let name = path.to_string_lossy();
-            anyhow::ensure!(is_markdown(&name), "Not a markdown file: {}", path.display());
+            anyhow::ensure!(
+                is_markdown(&name),
+                "Not a markdown file: {}",
+                path.display()
+            );
 
             let content = std::fs::read_to_string(&path)
                 .with_context(|| format!("Cannot read file: {}", path.display()))?;
