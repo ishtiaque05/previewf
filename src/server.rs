@@ -34,9 +34,23 @@ struct Assets;
 /// Immutable server configuration produced by [`ServerBuilder`].
 #[derive(Clone, Debug)]
 pub struct ServerConfig {
-    pub path: PathBuf,
-    pub port: u16,
-    pub live_reload: bool,
+    path: PathBuf,
+    port: u16,
+    live_reload: bool,
+}
+
+impl ServerConfig {
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    pub fn port(&self) -> u16 {
+        self.port
+    }
+
+    pub fn live_reload(&self) -> bool {
+        self.live_reload
+    }
 }
 
 /// Builder for [`ServerConfig`].
@@ -154,8 +168,8 @@ pub async fn run(config: ServerConfig) -> Result<(), PreviewError> {
     let (reload_tx, _) = broadcast::channel::<()>(16);
 
     // Optionally start the file watcher
-    if config.live_reload {
-        let watcher_path = config.path.clone();
+    if config.live_reload() {
+        let watcher_path = config.path().to_path_buf();
         let tx = reload_tx.clone();
         tokio::spawn(async move {
             match crate::watcher::FileWatcher::new(watcher_path) {
@@ -179,13 +193,13 @@ pub async fn run(config: ServerConfig) -> Result<(), PreviewError> {
 
     let app = create_router_with_reload(config.clone(), reload_tx);
 
-    let addr = format!("127.0.0.1:{}", config.port);
+    let addr = format!("127.0.0.1:{}", config.port());
     let listener = tokio::net::TcpListener::bind(&addr).await?;
 
     eprintln!(
         "previewf serving {} on http://localhost:{}",
-        config.path.display(),
-        config.port
+        config.path().display(),
+        config.port()
     );
 
     axum::serve(listener, app).await?;
@@ -199,7 +213,7 @@ pub async fn run(config: ServerConfig) -> Result<(), PreviewError> {
 
 /// `GET /` — directory listing, or redirect to single file.
 async fn index_handler(State(state): State<AppState>) -> Response {
-    let base = &state.config.path;
+    let base = state.config.path();
 
     // If the path is a single file, redirect to the appropriate viewer.
     if base.is_file() {
@@ -281,7 +295,7 @@ async fn view_handler(
     State(state): State<AppState>,
     AxumPath(filepath): AxumPath<String>,
 ) -> Response {
-    let full_path = match resolve_path(&state.config.path, &filepath) {
+    let full_path = match resolve_path(state.config.path(), &filepath) {
         Some(p) => p,
         None => return not_found_response(&filepath),
     };
@@ -317,7 +331,7 @@ async fn raw_handler(
     State(state): State<AppState>,
     AxumPath(filepath): AxumPath<String>,
 ) -> Response {
-    let full_path = match resolve_path(&state.config.path, &filepath) {
+    let full_path = match resolve_path(state.config.path(), &filepath) {
         Some(p) => p,
         None => return not_found_response(&filepath),
     };
@@ -333,7 +347,7 @@ async fn flags_handler(
     State(state): State<AppState>,
     AxumPath(filepath): AxumPath<String>,
 ) -> Response {
-    let full_path = match resolve_path(&state.config.path, &filepath) {
+    let full_path = match resolve_path(state.config.path(), &filepath) {
         Some(p) => p,
         None => return not_found_response(&filepath),
     };
@@ -377,7 +391,7 @@ async fn flag_handler(
         return (StatusCode::BAD_REQUEST, "Flags can only be added to markdown files").into_response();
     }
 
-    let full_path = match resolve_path(&state.config.path, &filepath) {
+    let full_path = match resolve_path(state.config.path(), &filepath) {
         Some(p) => p,
         None => return not_found_response(&filepath),
     };
