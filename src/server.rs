@@ -194,34 +194,54 @@ async fn index_handler(State(state): State<AppState>) -> Response {
         };
     }
 
-    // Collect eligible files (.md and .html)
-    let mut entries: Vec<(String, &str)> = Vec::new();
+    // Collect eligible files (.md and .html) with flag counts for markdown
+    let mut md_files: Vec<(String, usize)> = Vec::new();
+    let mut html_files: Vec<String> = Vec::new();
     if let Ok(read_dir) = std::fs::read_dir(base) {
         for entry in read_dir.flatten() {
             let name = entry.file_name().to_string_lossy().to_string();
             if is_markdown(&name) {
-                entries.push((name, "markdown"));
+                let content = std::fs::read_to_string(entry.path()).unwrap_or_default();
+                let flag_count = extract_flags(&content).len();
+                md_files.push((name, flag_count));
             } else if name.ends_with(".html") || name.ends_with(".htm") {
-                entries.push((name, "html"));
+                html_files.push(name);
             }
         }
     }
-    entries.sort_by(|a, b| a.0.to_lowercase().cmp(&b.0.to_lowercase()));
+    md_files.sort_by(|a, b| a.0.to_lowercase().cmp(&b.0.to_lowercase()));
+    html_files.sort_unstable();
 
     // Build HTML entries
-    let file_entries: String = entries
-        .iter()
-        .map(|(name, kind)| {
-            let route = if *kind == "markdown" { "view" } else { "raw" };
-            let icon = if *kind == "markdown" { "&#128196;" } else { "&#127760;" };
-            format!(
-                r#"<div class="file-entry"><div class="file-entry-name"><span class="file-entry-icon {kind}">{icon}</span><a href="/{route}/{name}">{name}</a></div><div class="file-entry-meta">{kind}</div></div>"#,
-            )
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
+    let mut file_entries_parts: Vec<String> = Vec::new();
 
-    let summary = format!("{} file(s)", entries.len());
+    for (name, flag_count) in &md_files {
+        let badge = if *flag_count > 0 {
+            format!(
+                r#"<span class="file-entry-badge has-flags">{} flag{}</span>"#,
+                flag_count,
+                if *flag_count == 1 { "" } else { "s" }
+            )
+        } else {
+            r#"<span class="file-entry-badge">&mdash;</span>"#.to_string()
+        };
+        file_entries_parts.push(format!(
+            r#"<a class="file-entry" href="/view/{name}"><span><span class="file-entry-icon">&#9670;</span><span class="file-entry-name">{name}</span></span>{badge}</a>"#,
+        ));
+    }
+
+    for name in &html_files {
+        file_entries_parts.push(format!(
+            r#"<a class="file-entry" href="/raw/{name}"><span><span class="file-entry-icon">&#9671;</span><span class="file-entry-name">{name}</span></span><span class="file-entry-badge">(html)</span></a>"#,
+        ));
+    }
+
+    let file_entries = file_entries_parts.join("\n");
+    let summary = format!(
+        "{} markdown &middot; {} html",
+        md_files.len(),
+        html_files.len()
+    );
     let dir_display = base.display().to_string();
 
     // Load the index template from embedded assets
@@ -315,8 +335,8 @@ async fn flags_handler(
 /// Request body for flag injection.
 #[derive(Deserialize)]
 struct FlagRequest {
-    line: usize,
     comment: String,
+    selected_text: String,
 }
 
 /// `POST /flag/{*filepath}` — inject a flag into a markdown file.
@@ -332,9 +352,26 @@ async fn flag_handler(
         Err(_) => return not_found_response(&filepath),
     };
 
-    match inject_flag(&content, body.line, &body.comment) {
+    // Find the line containing the selected text
+    let line = content
+        .lines()
+        .enumerate()
+        .find(|(_, l)| l.contains(&body.selected_text))
+        .map(|(i, _)| i + 1);
+
+    let line = match line {
+        Some(l) => l,
+        None => {
+            return (StatusCode::BAD_REQUEST, "Selected text not found in file").into_response()
+        }
+    };
+
+    match inject_flag(&content, line, &body.comment) {
         Ok(new_content) => match std::fs::write(&full_path, &new_content) {
-            Ok(_) => (StatusCode::OK, "Flag injected").into_response(),
+            Ok(_) => {
+                let _ = state.reload_tx.send(());
+                (StatusCode::OK, "Flag injected").into_response()
+            }
             Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
         },
         Err(e) => (StatusCode::BAD_REQUEST, e.to_string()).into_response(),
