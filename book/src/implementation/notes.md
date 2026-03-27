@@ -180,6 +180,6 @@ Wired the three stub CLI subcommands in `src/main.rs` to their actual implementa
 
 ### Notes
 
-- Task 10 (file watcher integration with server) was already completed as part of PR #5 — the `run()` function in `server.rs` spawns a background watcher task when `live_reload` is enabled
+- Task 10 (file watcher integration with server) was already completed as part of the server stack (PR #4) — the `run()` function in `server.rs` spawns a background watcher task when `live_reload` is enabled
 - No new dependencies added — `anyhow::Context` was already available
 - All 53 existing tests continue to pass

@@ -4,7 +4,7 @@ use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 
 use previewf::flags::{extract_flags, format_flags_text, FlagReport};
-use previewf::server::ServerBuilder;
+use previewf::server::{is_markdown, ServerBuilder};
 use previewf::terminal::render_terminal;
 
 #[derive(Parser)]
@@ -60,11 +60,12 @@ async fn main() -> Result<()> {
                 .build()
                 .context("Failed to configure server")?;
 
-            previewf::server::run(config)
-                .await
-                .context("Server error")?;
+            previewf::server::run(config).await?;
         }
         Commands::View { path } => {
+            let name = path.to_string_lossy();
+            anyhow::ensure!(is_markdown(&name), "Not a markdown file: {}", path.display());
+
             let content = std::fs::read_to_string(&path)
                 .with_context(|| format!("Cannot read file: {}", path.display()))?;
 
@@ -72,6 +73,9 @@ async fn main() -> Result<()> {
             print!("{rendered}");
         }
         Commands::Flags { path, json } => {
+            let name = path.to_string_lossy();
+            anyhow::ensure!(is_markdown(&name), "Not a markdown file: {}", path.display());
+
             let content = std::fs::read_to_string(&path)
                 .with_context(|| format!("Cannot read file: {}", path.display()))?;
 
