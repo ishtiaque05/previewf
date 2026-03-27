@@ -291,3 +291,243 @@ fn test_builder_accepts_valid_path() {
     let result = ServerBuilder::new().path("tests/fixtures").build();
     assert!(result.is_ok(), "build should succeed for valid path");
 }
+
+// --- Path traversal prevention ---
+
+#[tokio::test]
+async fn test_view_path_traversal_returns_404() {
+    let app = create_test_app();
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/view/../../etc/passwd")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn test_raw_path_traversal_returns_404() {
+    let app = create_test_app();
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/raw/../../etc/passwd")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn test_flags_path_traversal_returns_404() {
+    let app = create_test_app();
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/flags/../../etc/passwd")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+// --- XSS prevention ---
+
+#[tokio::test]
+async fn test_view_xss_in_path_is_escaped() {
+    let app = create_test_app();
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/view/%3Cscript%3Ealert(1)%3C%2Fscript%3E.md")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let html = String::from_utf8(body.to_vec()).unwrap();
+    assert!(
+        !html.contains("<script>alert(1)</script>"),
+        "Response body must not contain unescaped script tags"
+    );
+}
+
+// --- View handler validation ---
+
+#[tokio::test]
+async fn test_view_non_markdown_returns_400() {
+    let app = create_test_app();
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/view/sample.html")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
+// --- Flag POST endpoint ---
+
+#[tokio::test]
+async fn test_flag_post_injects_flag_into_markdown() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let file_path = dir.path().join("test.md");
+    std::fs::write(&file_path, "# Hello\n\nThis is a test line.\n").unwrap();
+
+    let config = ServerBuilder::new()
+        .path(dir.path())
+        .port(0)
+        .live_reload(false)
+        .build()
+        .unwrap();
+    let app = create_router(config);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/flag/test.md")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "comment": "needs review",
+                        "selected_text": "test line"
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let content = std::fs::read_to_string(&file_path).unwrap();
+    assert!(
+        content.contains("<flag:1>"),
+        "File should contain injected flag"
+    );
+}
+
+#[tokio::test]
+async fn test_flag_post_selected_text_not_found_returns_400() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let file_path = dir.path().join("test.md");
+    std::fs::write(&file_path, "# Hello\n").unwrap();
+
+    let config = ServerBuilder::new()
+        .path(dir.path())
+        .port(0)
+        .live_reload(false)
+        .build()
+        .unwrap();
+    let app = create_router(config);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/flag/test.md")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "comment": "test",
+                        "selected_text": "nonexistent text"
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn test_flag_post_nonexistent_file_returns_404() {
+    let app = create_test_app();
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/flag/nonexistent.md")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "comment": "test",
+                        "selected_text": "text"
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn test_flag_post_non_markdown_returns_400() {
+    let app = create_test_app();
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/flag/sample.html")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "comment": "test",
+                        "selected_text": "text"
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
+// --- Security headers ---
+
+#[tokio::test]
+async fn test_responses_include_security_headers() {
+    let app = create_test_app();
+    let response = app
+        .oneshot(Request::builder().uri("/").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+
+    assert_eq!(
+        response.headers().get("X-Content-Type-Options").unwrap(),
+        "nosniff"
+    );
+    assert_eq!(
+        response.headers().get("X-Frame-Options").unwrap(),
+        "DENY"
+    );
+    assert!(response
+        .headers()
+        .get("Content-Security-Policy")
+        .is_some());
+}
