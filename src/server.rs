@@ -1,8 +1,10 @@
 use std::path::{Path, PathBuf};
 
+use axum::body::Body;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{Path as AxumPath, State};
-use axum::http::{header, StatusCode};
+use axum::http::{header, StatusCode, Request as HttpRequest};
+use axum::middleware::{self, Next};
 use axum::response::{Html, IntoResponse, Redirect, Response};
 use axum::routing::{get, post};
 use axum::Router;
@@ -98,6 +100,20 @@ struct AppState {
 // Router construction (public for testing)
 // ---------------------------------------------------------------------------
 
+async fn security_headers(request: HttpRequest<Body>, next: Next) -> Response {
+    let mut response = next.run(request).await;
+    let headers = response.headers_mut();
+    headers.insert("X-Content-Type-Options", "nosniff".parse().unwrap());
+    headers.insert("X-Frame-Options", "DENY".parse().unwrap());
+    headers.insert(
+        "Content-Security-Policy",
+        "default-src 'self'; script-src 'self'; style-src 'self' https://fonts.googleapis.com 'unsafe-inline'; font-src 'self' https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self' ws: wss:"
+            .parse()
+            .unwrap(),
+    );
+    response
+}
+
 /// Create the axum [`Router`] for the preview server.
 ///
 /// Exposed publicly so integration tests can drive requests without binding
@@ -118,6 +134,7 @@ fn create_router_with_reload(config: ServerConfig, reload_tx: broadcast::Sender<
         .route("/ws", get(ws_handler))
         .route("/assets/{*filepath}", get(asset_handler))
         .with_state(state)
+        .layer(middleware::from_fn(security_headers))
 }
 
 // ---------------------------------------------------------------------------
@@ -155,7 +172,7 @@ pub async fn run(config: ServerConfig) -> Result<(), PreviewError> {
 
     let app = create_router_with_reload(config.clone(), reload_tx);
 
-    let addr = format!("0.0.0.0:{}", config.port);
+    let addr = format!("127.0.0.1:{}", config.port);
     let listener = tokio::net::TcpListener::bind(&addr).await?;
 
     eprintln!(
