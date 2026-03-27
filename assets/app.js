@@ -26,6 +26,10 @@
 
     function applyTheme(theme) {
         document.documentElement.setAttribute('data-theme', theme);
+    }
+
+    function persistTheme(theme) {
+        applyTheme(theme);
         localStorage.setItem(THEME_KEY, theme);
     }
 
@@ -38,7 +42,7 @@
             toggle.addEventListener('click', function () {
                 var current = document.documentElement.getAttribute('data-theme');
                 var next = current === 'dark' ? 'light' : 'dark';
-                applyTheme(next);
+                persistTheme(next);
             });
         }
 
