@@ -1,26 +1,23 @@
 //! Terminal markdown rendering via termimad.
 
+use std::sync::LazyLock;
+
 use regex::Regex;
 use termimad::MadSkin;
 
-/// Render markdown content for terminal display using termimad.
-///
-/// Converts flag tags to bold-formatted annotations before rendering,
-/// then uses termimad's `MadSkin` to produce terminal-formatted output.
+static FLAG_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"<flag:(\d+)>Comment:\s*(.+?)</flag>").unwrap());
+
+/// Render markdown content for terminal display.
 pub fn render_terminal(content: &str) -> String {
     let prepared = prepare_flags_for_terminal(content);
     let skin = MadSkin::default();
     skin.text(&prepared, None).to_string()
 }
 
-/// Convert `<flag:N>Comment: text</flag>` to bold markdown annotations
-/// suitable for terminal rendering.
-///
-/// Transforms: `<flag:1>Comment: check this</flag>`
-/// Into: `**[FLAG #1:** check this**]**`
 fn prepare_flags_for_terminal(content: &str) -> String {
-    let re = Regex::new(r"<flag:(\d+)>Comment:\s*(.+?)</flag>").unwrap();
-    re.replace_all(content, "**[FLAG #$1:** $2**]**")
+    FLAG_RE
+        .replace_all(content, "**[FLAG #$1:** $2**]**")
         .into_owned()
 }
 
