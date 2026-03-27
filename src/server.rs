@@ -1,4 +1,6 @@
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use axum::body::Body;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
@@ -10,7 +12,7 @@ use axum::routing::{get, post};
 use axum::Router;
 use rust_embed::Embed;
 use serde::Deserialize;
-use tokio::sync::broadcast;
+use tokio::sync::{broadcast, Mutex};
 
 use crate::flags::{extract_flags, inject_flag, FlagReport};
 use crate::html;
@@ -94,6 +96,7 @@ impl Default for ServerBuilder {
 struct AppState {
     config: ServerConfig,
     reload_tx: broadcast::Sender<()>,
+    file_locks: Arc<Mutex<HashMap<PathBuf, Arc<Mutex<()>>>>>,
 }
 
 // ---------------------------------------------------------------------------
@@ -123,7 +126,11 @@ pub fn create_router(config: ServerConfig) -> Router {
 }
 
 fn create_router_with_reload(config: ServerConfig, reload_tx: broadcast::Sender<()>) -> Router {
-    let state = AppState { config, reload_tx };
+    let state = AppState {
+        config,
+        reload_tx,
+        file_locks: Arc::new(Mutex::new(HashMap::new())),
+    };
 
     Router::new()
         .route("/", get(index_handler))
@@ -366,17 +373,30 @@ async fn flag_handler(
     AxumPath(filepath): AxumPath<String>,
     axum::Json(body): axum::Json<FlagRequest>,
 ) -> Response {
+    if !is_markdown(&filepath) {
+        return (StatusCode::BAD_REQUEST, "Flags can only be added to markdown files").into_response();
+    }
+
     let full_path = match resolve_path(&state.config.path, &filepath) {
         Some(p) => p,
         None => return not_found_response(&filepath),
     };
+
+    // Acquire per-file lock to prevent concurrent read-modify-write races
+    let file_lock = {
+        let mut locks = state.file_locks.lock().await;
+        locks
+            .entry(full_path.clone())
+            .or_insert_with(|| Arc::new(Mutex::new(())))
+            .clone()
+    };
+    let _guard = file_lock.lock().await;
 
     let content = match std::fs::read_to_string(&full_path) {
         Ok(c) => c,
         Err(_) => return not_found_response(&filepath),
     };
 
-    // Find the line containing the selected text
     let line = content
         .lines()
         .enumerate()
@@ -393,7 +413,7 @@ async fn flag_handler(
     match inject_flag(&content, line, &body.comment) {
         Ok(new_content) => match std::fs::write(&full_path, &new_content) {
             Ok(_) => {
-                let _ = state.reload_tx.send(());
+                // Don't send explicit reload — the file watcher will detect the write
                 (StatusCode::OK, "Flag injected").into_response()
             }
             Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
