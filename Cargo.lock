@@ -1336,9 +1336,11 @@ dependencies = [
  "serde",
  "serde_json",
  "syntect",
+ "tempfile",
  "termimad",
  "thiserror 2.0.18",
  "tokio",
+ "tower",
  "tower-http",
 ]
 

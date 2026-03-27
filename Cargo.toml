@@ -26,3 +26,5 @@ tower-http = { version = "0.6", features = ["cors", "fs"] }
 googletest = "0.14"
 insta = { version = "1", features = ["json"] }
 mockall = "0.13"
+tempfile = "3"
+tower = { version = "0.5", features = ["util"] }
