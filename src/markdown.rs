@@ -39,7 +39,10 @@ pub fn render_html(content: &str) -> String {
 }
 
 fn highlight_code_blocks(html: &str) -> String {
-    let theme = &THEME_SET.themes["base16-ocean.dark"];
+    let theme = THEME_SET
+        .themes
+        .get("base16-ocean.dark")
+        .expect("default syntect theme set must include base16-ocean.dark");
 
     CODE_BLOCK_RE
         .replace_all(html, |caps: &regex::Captures| {
@@ -53,9 +56,13 @@ fn highlight_code_blocks(html: &str) -> String {
             if let Some(syntax) = SYNTAX_SET.find_syntax_by_token(lang) {
                 match highlighted_html_for_string(&code, &SYNTAX_SET, syntax, theme) {
                     Ok(highlighted) => highlighted,
-                    Err(_) => caps[0].to_string(),
+                    Err(e) => {
+                        eprintln!("Warning: syntax highlighting failed for '{lang}': {e}");
+                        caps[0].to_string()
+                    }
                 }
             } else {
+                eprintln!("Warning: no syntax definition for '{lang}'");
                 caps[0].to_string()
             }
         })
@@ -90,7 +97,7 @@ fn render_flags(html: &str) -> String {
     FLAG_RE
         .replace_all(html, |caps: &regex::Captures| {
             let id = &caps[1];
-            let comment = caps[2].trim();
+            let comment = html_escape_encode(caps[2].trim());
             format!(
                 "<span class=\"flag\" data-flag-id=\"{id}\">\
                  <span class=\"flag-marker\">#{id}</span>\
@@ -102,11 +109,11 @@ fn render_flags(html: &str) -> String {
 }
 
 fn html_escape_decode(s: &str) -> String {
-    s.replace("&amp;", "&")
-        .replace("&lt;", "<")
+    s.replace("&lt;", "<")
         .replace("&gt;", ">")
         .replace("&quot;", "\"")
         .replace("&#39;", "'")
+        .replace("&amp;", "&")
 }
 
 fn html_escape_encode(s: &str) -> String {
@@ -139,5 +146,21 @@ mod tests {
         expect_that!(result, contains_substring("class=\"flag-marker\""));
         expect_that!(result, contains_substring("class=\"flag-comment\""));
         expect_that!(result, contains_substring("something"));
+    }
+
+    #[gtest]
+    fn test_render_flags_escapes_html_in_comment() {
+        let input = "<flag:1>Comment: <script>alert(1)</script></flag>";
+        let result = render_flags(input);
+        expect_that!(result, not(contains_substring("<script>")));
+        expect_that!(result, contains_substring("&lt;script&gt;"));
+    }
+
+    #[gtest]
+    fn test_html_escape_decode_no_double_decode() {
+        // Source code containing literal "&lt;" should survive encode→decode roundtrip
+        let input = "&amp;lt;script&amp;gt;";
+        let decoded = html_escape_decode(input);
+        expect_that!(decoded, eq("&lt;script&gt;"));
     }
 }
