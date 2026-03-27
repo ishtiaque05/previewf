@@ -1,0 +1,16 @@
+[book]
+authors = ["Syed"]
+language = "en"
+multilingual = false
+src = "src"
+title = "previewf — The Complete Guide"
+description = "Comprehensive documentation for previewf, a Rust CLI tool for previewing and annotating markdown files"
+
+[build]
+build-dir = "book"
+create-missing = true
+
+[output.html]
+default-theme = "light"
+preferred-dark-theme = "navy"
+git-repository-url = "https://github.com/ishtiaque05/previewf"
