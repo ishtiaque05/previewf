@@ -61,7 +61,7 @@ jobs:
             target/
           key: ${{ runner.os }}-cargo-test-${{ hashFiles('**/Cargo.lock') }}
       - uses: taiki-e/install-action@nextest
-      - run: cargo nextest run
+      - run: cargo nextest run --no-tests=pass
 
   coverage:
     name: Coverage
