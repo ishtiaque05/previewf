@@ -287,7 +287,7 @@
             return;
         }
 
-        var url = '/flag/' + encodeURIComponent(currentFilepath);
+        var url = '/flag/' + currentFilepath.split('/').map(encodeURIComponent).join('/');
         var body = JSON.stringify({
             comment: comment,
             selected_text: selectedText
