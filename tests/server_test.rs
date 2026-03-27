@@ -522,12 +522,6 @@ async fn test_responses_include_security_headers() {
         response.headers().get("X-Content-Type-Options").unwrap(),
         "nosniff"
     );
-    assert_eq!(
-        response.headers().get("X-Frame-Options").unwrap(),
-        "DENY"
-    );
-    assert!(response
-        .headers()
-        .get("Content-Security-Policy")
-        .is_some());
+    assert_eq!(response.headers().get("X-Frame-Options").unwrap(), "DENY");
+    assert!(response.headers().get("Content-Security-Policy").is_some());
 }

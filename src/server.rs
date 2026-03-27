@@ -5,7 +5,7 @@ use std::sync::Arc;
 use axum::body::Body;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{Path as AxumPath, State};
-use axum::http::{header, StatusCode, Request as HttpRequest};
+use axum::http::{header, Request as HttpRequest, StatusCode};
 use axum::middleware::{self, Next};
 use axum::response::{Html, IntoResponse, Redirect, Response};
 use axum::routing::{get, post};
@@ -173,17 +173,15 @@ pub async fn run(config: ServerConfig) -> Result<(), PreviewError> {
         let tx = reload_tx.clone();
         tokio::spawn(async move {
             match crate::watcher::FileWatcher::new(watcher_path) {
-                Ok((_fw, mut rx)) => {
-                    loop {
-                        match rx.recv().await {
-                            Ok(_) => {
-                                let _ = tx.send(());
-                            }
-                            Err(broadcast::error::RecvError::Lagged(_)) => continue,
-                            Err(_) => break,
+                Ok((_fw, mut rx)) => loop {
+                    match rx.recv().await {
+                        Ok(_) => {
+                            let _ = tx.send(());
                         }
+                        Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                        Err(_) => break,
                     }
-                }
+                },
                 Err(e) => {
                     eprintln!("Warning: file watcher failed to start: {e}");
                 }
@@ -388,7 +386,11 @@ async fn flag_handler(
     axum::Json(body): axum::Json<FlagRequest>,
 ) -> Response {
     if !is_markdown(&filepath) {
-        return (StatusCode::BAD_REQUEST, "Flags can only be added to markdown files").into_response();
+        return (
+            StatusCode::BAD_REQUEST,
+            "Flags can only be added to markdown files",
+        )
+            .into_response();
     }
 
     let full_path = match resolve_path(state.config.path(), &filepath) {
@@ -522,4 +524,3 @@ fn not_found_response(filepath: &str) -> Response {
     )
         .into_response()
 }
-

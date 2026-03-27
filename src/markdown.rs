@@ -108,7 +108,6 @@ fn render_flags(html: &str) -> String {
         .into_owned()
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -6,7 +6,6 @@ use tokio::sync::broadcast;
 use crate::PreviewError;
 
 pub struct FileWatcher {
-    path: PathBuf,
     _watcher: RecommendedWatcher,
     sender: broadcast::Sender<PathBuf>,
 }
@@ -18,8 +17,8 @@ impl FileWatcher {
         let (sender, receiver) = broadcast::channel(100);
         let tx = sender.clone();
 
-        let mut watcher = notify::recommended_watcher(move |res: Result<Event, notify::Error>| {
-            match res {
+        let mut watcher =
+            notify::recommended_watcher(move |res: Result<Event, notify::Error>| match res {
                 Ok(event) => {
                     if event.kind.is_modify() || event.kind.is_create() {
                         for path in event.paths {
@@ -30,9 +29,8 @@ impl FileWatcher {
                 Err(e) => {
                     eprintln!("Warning: file watcher error: {e}");
                 }
-            }
-        })
-        .map_err(PreviewError::Watcher)?;
+            })
+            .map_err(PreviewError::Watcher)?;
 
         let mode = if path.is_dir() {
             RecursiveMode::Recursive
@@ -40,13 +38,10 @@ impl FileWatcher {
             RecursiveMode::NonRecursive
         };
 
-        watcher
-            .watch(&path, mode)
-            .map_err(PreviewError::Watcher)?;
+        watcher.watch(&path, mode).map_err(PreviewError::Watcher)?;
 
         Ok((
             Self {
-                path,
                 _watcher: watcher,
                 sender,
             },
