@@ -6,53 +6,47 @@ use tokio::sync::broadcast;
 use crate::PreviewError;
 
 pub struct FileWatcher {
-    path: PathBuf,
-    watcher: Option<RecommendedWatcher>,
+    _watcher: RecommendedWatcher,
     sender: broadcast::Sender<PathBuf>,
 }
 
 impl FileWatcher {
-    /// Create a new file watcher for the given path.
+    /// Create and start a file watcher for the given path.
     /// Returns the watcher and a receiver for change notifications.
     pub fn new(path: PathBuf) -> Result<(Self, broadcast::Receiver<PathBuf>), PreviewError> {
         let (sender, receiver) = broadcast::channel(100);
+        let tx = sender.clone();
 
-        let watcher = FileWatcher {
-            path,
-            watcher: None,
-            sender,
-        };
-
-        Ok((watcher, receiver))
-    }
-
-    /// Start watching for file changes.
-    pub fn watch(&mut self) -> Result<(), PreviewError> {
-        let sender = self.sender.clone();
-
-        let mut watcher = notify::recommended_watcher(move |res: Result<Event, notify::Error>| {
-            if let Ok(event) = res {
-                if event.kind.is_modify() || event.kind.is_create() {
-                    for path in event.paths {
-                        let _ = sender.send(path);
+        let mut watcher =
+            notify::recommended_watcher(move |res: Result<Event, notify::Error>| match res {
+                Ok(event) => {
+                    if event.kind.is_modify() || event.kind.is_create() {
+                        for path in event.paths {
+                            let _ = tx.send(path);
+                        }
                     }
                 }
-            }
-        })
-        .map_err(PreviewError::Watcher)?;
+                Err(e) => {
+                    eprintln!("Warning: file watcher error: {e}");
+                }
+            })
+            .map_err(PreviewError::Watcher)?;
 
-        let mode = if self.path.is_dir() {
+        let mode = if path.is_dir() {
             RecursiveMode::Recursive
         } else {
             RecursiveMode::NonRecursive
         };
 
-        watcher
-            .watch(&self.path, mode)
-            .map_err(PreviewError::Watcher)?;
+        watcher.watch(&path, mode).map_err(PreviewError::Watcher)?;
 
-        self.watcher = Some(watcher);
-        Ok(())
+        Ok((
+            Self {
+                _watcher: watcher,
+                sender,
+            },
+            receiver,
+        ))
     }
 
     /// Get a new receiver for change notifications.

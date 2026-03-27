@@ -26,6 +26,10 @@
 
     function applyTheme(theme) {
         document.documentElement.setAttribute('data-theme', theme);
+    }
+
+    function persistTheme(theme) {
+        applyTheme(theme);
         localStorage.setItem(THEME_KEY, theme);
     }
 
@@ -38,7 +42,7 @@
             toggle.addEventListener('click', function () {
                 var current = document.documentElement.getAttribute('data-theme');
                 var next = current === 'dark' ? 'light' : 'dark';
-                applyTheme(next);
+                persistTheme(next);
             });
         }
 
@@ -84,7 +88,8 @@
         for (var i = 0; i < flags.length; i++) {
             var flagEl = flags[i];
             var flagId = flagEl.getAttribute('data-flag-id');
-            var flagComment = flagEl.getAttribute('data-flag-comment') || '';
+            var flagCommentEl = flagEl.querySelector('.flag-comment');
+            var flagComment = flagCommentEl ? flagCommentEl.textContent : '';
 
             var item = createFlagItem(flagId, flagComment, flagEl);
             flagList.appendChild(item);
@@ -282,7 +287,7 @@
             return;
         }
 
-        var url = '/flag/' + encodeURIComponent(currentFilepath);
+        var url = '/flag/' + currentFilepath.split('/').map(encodeURIComponent).join('/');
         var body = JSON.stringify({
             comment: comment,
             selected_text: selectedText
