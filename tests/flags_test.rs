@@ -1,0 +1,269 @@
+use previewf::flags::{extract_flags, format_flags_text, inject_flag, Flag, FlagReport};
+
+// --- extract_flags ---
+
+#[test]
+fn test_extract_flags_from_flagged_file() {
+    let content = std::fs::read_to_string("tests/fixtures/flagged.md").unwrap();
+    let flags = extract_flags(&content);
+
+    assert_eq!(flags.len(), 4);
+    assert_eq!(flags[0].id, 1);
+    assert_eq!(flags[0].comment, "need to rethink this approach");
+    assert_eq!(flags[0].line, 3);
+    assert_eq!(flags[1].id, 2);
+    assert_eq!(flags[1].comment, "contradicts section 3");
+    assert_eq!(flags[1].line, 5);
+}
+
+#[test]
+fn test_extract_flags_from_clean_file() {
+    let content = std::fs::read_to_string("tests/fixtures/sample.md").unwrap();
+    let flags = extract_flags(&content);
+    assert_eq!(flags.len(), 0);
+}
+
+#[test]
+fn test_extract_flags_empty_string() {
+    let flags = extract_flags("");
+    assert_eq!(flags.len(), 0);
+}
+
+#[test]
+fn test_extract_flags_multiple_on_one_line() {
+    let content = std::fs::read_to_string("tests/fixtures/flagged.md").unwrap();
+    let flags = extract_flags(&content);
+    let line_9_flags: Vec<&Flag> = flags.iter().filter(|f| f.line == 9).collect();
+    assert_eq!(line_9_flags.len(), 2);
+    assert_eq!(line_9_flags[0].id, 3);
+    assert_eq!(line_9_flags[1].id, 4);
+}
+
+#[test]
+fn test_extract_flags_skips_invalid_id_zero() {
+    let content = "<flag:0>Comment: zero id</flag>\n";
+    let flags = extract_flags(content);
+    assert_eq!(flags.len(), 0, "flag with id=0 should be skipped");
+}
+
+#[test]
+fn test_extract_flags_skips_overflowed_id() {
+    let content = "<flag:99999999999>Comment: overflow</flag>\n";
+    let flags = extract_flags(content);
+    assert_eq!(
+        flags.len(),
+        0,
+        "flag with overflowed u32 id should be skipped"
+    );
+}
+
+#[test]
+fn test_extract_flags_preserves_leading_whitespace_in_context() {
+    let content = "    indented text <flag:1>Comment: check indent</flag>\n";
+    let flags = extract_flags(content);
+    assert_eq!(flags.len(), 1);
+    assert!(
+        flags[0].context.starts_with("    "),
+        "leading whitespace should be preserved, got: {:?}",
+        flags[0].context
+    );
+}
+
+#[test]
+fn test_extract_flags_without_comment_prefix_ignored() {
+    let content = "<flag:1>needs work</flag>\n";
+    let flags = extract_flags(content);
+    assert_eq!(
+        flags.len(),
+        0,
+        "flag without Comment: prefix should not match"
+    );
+}
+
+// --- next_flag_id ---
+
+#[test]
+fn test_next_flag_id_with_existing_flags() {
+    let content = std::fs::read_to_string("tests/fixtures/flagged.md").unwrap();
+    let next = previewf::flags::next_flag_id(&content);
+    assert_eq!(next, 5);
+}
+
+#[test]
+fn test_next_flag_id_no_flags() {
+    let content = std::fs::read_to_string("tests/fixtures/sample.md").unwrap();
+    let next = previewf::flags::next_flag_id(&content);
+    assert_eq!(next, 1);
+}
+
+#[test]
+fn test_next_flag_id_non_sequential() {
+    let content = "A <flag:1>Comment: first</flag>\nB <flag:10>Comment: tenth</flag>\n";
+    let next = previewf::flags::next_flag_id(content);
+    assert_eq!(next, 11, "should return max+1 even with gaps");
+}
+
+// --- inject_flag ---
+
+#[test]
+fn test_inject_flag_into_clean_content() {
+    let content = "Line one\nLine two\nLine three\n";
+    let result = inject_flag(content, 2, "needs work").unwrap();
+    assert!(result.contains("<flag:1>Comment: needs work</flag>"));
+    assert!(result.contains("Line two"));
+}
+
+#[test]
+fn test_inject_flag_into_flagged_content() {
+    let content = "Line one\n<flag:1>Comment: existing</flag> Line two\nLine three\n";
+    let result = inject_flag(content, 3, "also this").unwrap();
+    assert!(result.contains("<flag:2>Comment: also this</flag>"));
+    assert!(result.contains("<flag:1>Comment: existing</flag>"));
+}
+
+#[test]
+fn test_inject_flag_invalid_line_too_high() {
+    let content = "Line one\nLine two\n";
+    let result = inject_flag(content, 5, "bad line");
+    assert!(result.is_err());
+}
+
+#[test]
+fn test_inject_flag_invalid_line_zero() {
+    let content = "Line one\nLine two\n";
+    let result = inject_flag(content, 0, "bad line");
+    assert!(result.is_err());
+}
+
+#[test]
+fn test_inject_flag_preserves_trailing_newline() {
+    let content = "Line one\nLine two\n";
+    let result = inject_flag(content, 1, "test").unwrap();
+    assert!(
+        result.ends_with('\n'),
+        "trailing newline should be preserved"
+    );
+}
+
+#[test]
+fn test_inject_flag_no_trailing_newline_when_absent() {
+    let content = "Line one\nLine two";
+    let result = inject_flag(content, 1, "test").unwrap();
+    assert!(
+        !result.ends_with('\n'),
+        "should not add trailing newline when original lacks one"
+    );
+}
+
+#[test]
+fn test_inject_flag_sanitizes_closing_tag_in_comment() {
+    let content = "Line one\nLine two\n";
+    let result = inject_flag(content, 1, "break </flag> here").unwrap();
+    assert!(
+        !result.contains("break </flag> here"),
+        "raw </flag> in comment should be escaped"
+    );
+    // The injected flag should still be extractable
+    let flags = extract_flags(&result);
+    assert_eq!(flags.len(), 1);
+}
+
+#[test]
+fn test_inject_flag_sanitizes_html_in_comment() {
+    let content = "Line one\nLine two\n";
+    let result = inject_flag(content, 1, "<script>alert('xss')</script>").unwrap();
+    assert!(
+        !result.contains("<script>"),
+        "HTML tags in comment should be escaped"
+    );
+}
+
+#[test]
+fn test_inject_flag_rejects_code_fence_line() {
+    let content = "Text before\n```rust\nfn main() {}\n```\nText after\n";
+    let result = inject_flag(content, 2, "bad target");
+    assert!(
+        result.is_err(),
+        "should reject injection into code fence delimiter"
+    );
+}
+
+#[test]
+fn test_inject_flag_rejects_tilde_code_fence() {
+    let content = "Text before\n~~~\ncode\n~~~\nText after\n";
+    let result = inject_flag(content, 2, "bad target");
+    assert!(
+        result.is_err(),
+        "should reject injection into ~~~ fence delimiter"
+    );
+}
+
+// --- inject-extract round-trip ---
+
+#[test]
+fn test_inject_then_extract_round_trip() {
+    let content = "Line one\nLine two\nLine three\n";
+    let injected = inject_flag(content, 2, "review this").unwrap();
+    let flags = extract_flags(&injected);
+    assert_eq!(flags.len(), 1);
+    assert_eq!(flags[0].id, 1);
+    assert_eq!(flags[0].line, 2);
+    assert_eq!(flags[0].comment, "review this");
+}
+
+// --- flag_report_json ---
+
+#[test]
+fn test_flag_report_json() {
+    let content = std::fs::read_to_string("tests/fixtures/flagged.md").unwrap();
+    let flags = extract_flags(&content);
+    let report = FlagReport {
+        file: "flagged.md".to_string(),
+        flags,
+    };
+    let json = serde_json::to_string_pretty(&report).unwrap();
+    assert!(json.contains("\"id\": 1"));
+    assert!(json.contains("need to rethink this approach"));
+    assert!(
+        json.contains("\"context\""),
+        "JSON should use 'context' field name"
+    );
+}
+
+// --- format_flags_text ---
+
+#[test]
+fn test_format_flags_text_with_flags() {
+    let report = FlagReport {
+        file: "test.md".to_string(),
+        flags: vec![
+            Flag {
+                id: 1,
+                line: 3,
+                context: "some text".to_string(),
+                comment: "needs rework".to_string(),
+            },
+            Flag {
+                id: 2,
+                line: 7,
+                context: "other text".to_string(),
+                comment: "contradicts intro".to_string(),
+            },
+        ],
+    };
+    let output = format_flags_text(&report);
+    assert!(output.contains("Flags in test.md:"));
+    assert!(output.contains("#1 (line 3): needs rework"));
+    assert!(output.contains("Context: some text"));
+    assert!(output.contains("#2 (line 7): contradicts intro"));
+}
+
+#[test]
+fn test_format_flags_text_empty() {
+    let report = FlagReport {
+        file: "clean.md".to_string(),
+        flags: vec![],
+    };
+    let output = format_flags_text(&report);
+    assert!(output.contains("No flags found."));
+}
