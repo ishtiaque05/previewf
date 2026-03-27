@@ -120,23 +120,24 @@ fn html_escape_encode(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use googletest::prelude::*;
 
-    #[test]
+    #[gtest]
     fn test_html_escape_roundtrip() {
         let original = "<p>Hello & \"world\"</p>";
         let encoded = html_escape_encode(original);
         let decoded = html_escape_decode(&encoded);
-        assert_eq!(decoded, original);
+        expect_that!(decoded, eq(original));
     }
 
-    #[test]
+    #[gtest]
     fn test_render_flags_basic() {
         let input = "<flag:1>Comment: something</flag>";
         let result = render_flags(input);
-        assert!(result.contains("class=\"flag\""));
-        assert!(result.contains("data-flag-id=\"1\""));
-        assert!(result.contains("class=\"flag-marker\""));
-        assert!(result.contains("class=\"flag-comment\""));
-        assert!(result.contains("something"));
+        expect_that!(result, contains_substring("class=\"flag\""));
+        expect_that!(result, contains_substring("data-flag-id=\"1\""));
+        expect_that!(result, contains_substring("class=\"flag-marker\""));
+        expect_that!(result, contains_substring("class=\"flag-comment\""));
+        expect_that!(result, contains_substring("something"));
     }
 }

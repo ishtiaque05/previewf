@@ -1,16 +1,17 @@
+use googletest::prelude::*;
 use previewf::terminal::render_terminal;
 
-#[test]
+#[gtest]
 fn test_terminal_render_basic() {
     let content = "# Hello\n\nA paragraph.\n";
     let output = render_terminal(content);
-    assert!(output.contains("Hello"));
-    assert!(output.contains("paragraph"));
+    expect_that!(output, contains_substring("Hello"));
+    expect_that!(output, contains_substring("paragraph"));
 }
 
-#[test]
+#[gtest]
 fn test_terminal_render_with_flags() {
     let content = "Text <flag:1>Comment: check this</flag> here.\n";
     let output = render_terminal(content);
-    assert!(output.contains("check this"));
+    expect_that!(output, contains_substring("check this"));
 }

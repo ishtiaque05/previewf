@@ -24,28 +24,29 @@ fn prepare_flags_for_terminal(content: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use googletest::prelude::*;
 
-    #[test]
+    #[gtest]
     fn test_prepare_flags_basic() {
         let input = "<flag:1>Comment: check this</flag>";
         let result = prepare_flags_for_terminal(input);
-        assert_eq!(result, "**[FLAG #1:** check this**]**");
+        expect_that!(result, eq("**[FLAG #1:** check this**]**"));
     }
 
-    #[test]
+    #[gtest]
     fn test_prepare_flags_multiple() {
         let input = "Text <flag:1>Comment: first</flag> and <flag:2>Comment: second</flag>.";
         let result = prepare_flags_for_terminal(input);
-        assert!(result.contains("FLAG #1"));
-        assert!(result.contains("FLAG #2"));
-        assert!(result.contains("first"));
-        assert!(result.contains("second"));
+        expect_that!(result, contains_substring("FLAG #1"));
+        expect_that!(result, contains_substring("FLAG #2"));
+        expect_that!(result, contains_substring("first"));
+        expect_that!(result, contains_substring("second"));
     }
 
-    #[test]
+    #[gtest]
     fn test_prepare_flags_no_flags() {
         let input = "Just plain text.";
         let result = prepare_flags_for_terminal(input);
-        assert_eq!(result, input);
+        expect_that!(result, eq(input));
     }
 }
