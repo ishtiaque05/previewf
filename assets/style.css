@@ -1,0 +1,957 @@
+/* ==========================================================================
+   previewf — "The Annotated Page" editorial design
+   ========================================================================== */
+
+/* --------------------------------------------------------------------------
+   CSS Custom Properties — Light theme ("Warm Paper")
+   -------------------------------------------------------------------------- */
+:root,
+[data-theme="light"] {
+    --bg: #FAF8F5;
+    --bg-surface: #FFFFFF;
+    --text: #2D2D2D;
+    --text-muted: #6B6B6B;
+    --accent: #C45B28;
+    --flag-bg: #FFF3CD;
+    --flag-border: #E6A817;
+    --code-bg: #F5F2EF;
+    --link: #1A6B4F;
+    --sidebar-bg: #F0EDE8;
+
+    /* Diff colors — light */
+    --diff-added-bg: #DAFBE1;
+    --diff-added-text: #1A7F37;
+    --diff-removed-bg: #FFE2DD;
+    --diff-removed-text: #CF222E;
+    --diff-hunk-bg: #EDE8FD;
+    --diff-hunk-text: #6639BA;
+
+    /* Shadows and borders */
+    --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.06);
+    --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.08);
+    --shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.12);
+    --border-color: #E5E2DD;
+    --border-color-strong: #D0CCC5;
+}
+
+/* --------------------------------------------------------------------------
+   CSS Custom Properties — Dark theme ("Midnight Ink")
+   -------------------------------------------------------------------------- */
+[data-theme="dark"] {
+    --bg: #1A1A2E;
+    --bg-surface: #16213E;
+    --text: #E8E6E3;
+    --text-muted: #8B8FA3;
+    --accent: #E8845A;
+    --flag-bg: #3D2E1F;
+    --flag-border: #D4952B;
+    --code-bg: #0F0F23;
+    --link: #4ECDC4;
+    --sidebar-bg: #12122A;
+
+    /* Diff colors — dark */
+    --diff-added-bg: #1B3829;
+    --diff-added-text: #3FB950;
+    --diff-removed-bg: #3D1F1F;
+    --diff-removed-text: #F85149;
+    --diff-hunk-bg: #2D1F4E;
+    --diff-hunk-text: #BC8CFF;
+
+    /* Shadows and borders */
+    --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.2);
+    --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.3);
+    --shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.4);
+    --border-color: #2A2A45;
+    --border-color-strong: #3A3A5A;
+}
+
+/* --------------------------------------------------------------------------
+   Reset and Base
+   -------------------------------------------------------------------------- */
+*,
+*::before,
+*::after {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+html {
+    font-size: 16px;
+    scroll-behavior: smooth;
+    -webkit-text-size-adjust: 100%;
+}
+
+body {
+    font-family: 'Source Serif 4', Charter, 'Bitstream Charter', serif;
+    font-weight: 400;
+    line-height: 1.7;
+    color: var(--text);
+    background-color: var(--bg);
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    transition: background-color 300ms ease, color 300ms ease;
+}
+
+::selection {
+    background-color: var(--accent);
+    color: #FFFFFF;
+}
+
+/* --------------------------------------------------------------------------
+   Typography
+   -------------------------------------------------------------------------- */
+h1, h2, h3, h4, h5, h6 {
+    font-family: 'Playfair Display', Georgia, serif;
+    font-weight: 700;
+    line-height: 1.3;
+    color: var(--text);
+    margin-top: 1.8em;
+    margin-bottom: 0.6em;
+    transition: color 300ms ease;
+}
+
+h1 {
+    font-size: 2.4rem;
+    font-weight: 900;
+    letter-spacing: -0.02em;
+    margin-top: 0;
+}
+
+h2 {
+    font-size: 1.8rem;
+    padding-bottom: 0.3em;
+    border-bottom: 1px solid var(--border-color);
+}
+
+h3 {
+    font-size: 1.4rem;
+}
+
+h4 {
+    font-size: 1.15rem;
+}
+
+h5 {
+    font-size: 1rem;
+    font-weight: 700;
+}
+
+h6 {
+    font-size: 0.9rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--text-muted);
+}
+
+p {
+    margin-bottom: 1.2em;
+}
+
+a {
+    color: var(--link);
+    text-decoration: underline;
+    text-decoration-thickness: 1px;
+    text-underline-offset: 2px;
+    transition: color 300ms ease, text-decoration-color 300ms ease;
+}
+
+a:hover {
+    color: var(--accent);
+    text-decoration-color: var(--accent);
+}
+
+strong {
+    font-weight: 600;
+}
+
+em {
+    font-style: italic;
+}
+
+hr {
+    border: none;
+    border-top: 1px solid var(--border-color);
+    margin: 2.4em 0;
+}
+
+blockquote {
+    border-left: 3px solid var(--accent);
+    padding: 0.6em 1.2em;
+    margin: 1.2em 0;
+    color: var(--text-muted);
+    font-style: italic;
+    background-color: var(--bg-surface);
+    border-radius: 0 4px 4px 0;
+    transition: background-color 300ms ease, border-color 300ms ease, color 300ms ease;
+}
+
+blockquote p:last-child {
+    margin-bottom: 0;
+}
+
+/* --------------------------------------------------------------------------
+   Lists
+   -------------------------------------------------------------------------- */
+ul, ol {
+    margin-bottom: 1.2em;
+    padding-left: 1.6em;
+}
+
+li {
+    margin-bottom: 0.3em;
+}
+
+li > ul,
+li > ol {
+    margin-top: 0.3em;
+    margin-bottom: 0;
+}
+
+/* --------------------------------------------------------------------------
+   Code
+   -------------------------------------------------------------------------- */
+code {
+    font-family: 'JetBrains Mono', Menlo, 'Courier New', monospace;
+    font-size: 0.875em;
+    background-color: var(--code-bg);
+    padding: 0.15em 0.4em;
+    border-radius: 3px;
+    transition: background-color 300ms ease;
+}
+
+pre {
+    background-color: var(--code-bg);
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    padding: 1.2em 1.4em;
+    margin: 1.4em 0;
+    overflow-x: auto;
+    line-height: 1.5;
+    transition: background-color 300ms ease, border-color 300ms ease;
+}
+
+pre code {
+    background: none;
+    padding: 0;
+    border-radius: 0;
+    font-size: 0.85rem;
+}
+
+/* --------------------------------------------------------------------------
+   Tables
+   -------------------------------------------------------------------------- */
+table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 1.4em 0;
+    font-size: 0.95rem;
+}
+
+th, td {
+    padding: 0.6em 1em;
+    text-align: left;
+    border-bottom: 1px solid var(--border-color);
+    transition: border-color 300ms ease;
+}
+
+th {
+    font-family: 'DM Sans', system-ui, sans-serif;
+    font-weight: 700;
+    font-size: 0.8rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--text-muted);
+    border-bottom: 2px solid var(--border-color-strong);
+}
+
+tr:hover td {
+    background-color: var(--bg-surface);
+}
+
+/* --------------------------------------------------------------------------
+   Images
+   -------------------------------------------------------------------------- */
+img {
+    max-width: 100%;
+    height: auto;
+    border-radius: 6px;
+    margin: 1.2em 0;
+}
+
+/* --------------------------------------------------------------------------
+   Top Bar
+   -------------------------------------------------------------------------- */
+.top-bar {
+    position: sticky;
+    top: 0;
+    z-index: 100;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0.6em 1.4em;
+    background-color: var(--bg-surface);
+    border-bottom: 1px solid var(--border-color);
+    font-family: 'DM Sans', system-ui, sans-serif;
+    box-shadow: var(--shadow-sm);
+    transition: background-color 300ms ease, border-color 300ms ease, box-shadow 300ms ease;
+}
+
+.top-bar-left {
+    display: flex;
+    align-items: center;
+    gap: 1em;
+    min-width: 0;
+}
+
+.top-bar-right {
+    display: flex;
+    align-items: center;
+    gap: 0.8em;
+    flex-shrink: 0;
+}
+
+.logo {
+    font-weight: 700;
+    font-size: 1rem;
+    color: var(--accent);
+    letter-spacing: -0.02em;
+    white-space: nowrap;
+}
+
+.file-path {
+    font-size: 0.85rem;
+    color: var(--text-muted);
+    font-family: 'JetBrains Mono', Menlo, monospace;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+/* --------------------------------------------------------------------------
+   Theme Toggle
+   -------------------------------------------------------------------------- */
+.theme-toggle {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 2rem;
+    height: 2rem;
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    background: var(--bg);
+    color: var(--text);
+    cursor: pointer;
+    font-size: 1.1rem;
+    transition: background-color 300ms ease, border-color 300ms ease, color 300ms ease, transform 200ms ease;
+}
+
+.theme-toggle:hover {
+    background-color: var(--bg-surface);
+    border-color: var(--accent);
+    transform: scale(1.05);
+}
+
+.theme-toggle:active {
+    transform: scale(0.95);
+}
+
+/* Show/hide sun and moon icons based on theme */
+[data-theme="light"] .theme-icon-dark {
+    display: none;
+}
+
+[data-theme="dark"] .theme-icon-light {
+    display: none;
+}
+
+/* --------------------------------------------------------------------------
+   Flag Count Badge
+   -------------------------------------------------------------------------- */
+.flag-count {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 1.6rem;
+    height: 1.6rem;
+    padding: 0 0.4em;
+    border-radius: 999px;
+    background-color: var(--flag-bg);
+    border: 1px solid var(--flag-border);
+    color: var(--accent);
+    font-size: 0.75rem;
+    font-weight: 700;
+    font-family: 'DM Sans', system-ui, sans-serif;
+    transition: background-color 300ms ease, border-color 300ms ease, color 300ms ease;
+}
+
+/* --------------------------------------------------------------------------
+   Layout — Document View
+   -------------------------------------------------------------------------- */
+.layout {
+    display: flex;
+    flex: 1;
+    min-height: 0;
+}
+
+.document {
+    flex: 1;
+    max-width: 72ch;
+    margin: 0 auto;
+    padding: 2.4em 1.4em 4em;
+    animation: fadeIn 400ms ease-out;
+}
+
+/* --------------------------------------------------------------------------
+   Sidebar
+   -------------------------------------------------------------------------- */
+.sidebar {
+    width: 280px;
+    flex-shrink: 0;
+    background-color: var(--sidebar-bg);
+    border-left: 1px solid var(--border-color);
+    padding: 1.4em;
+    overflow-y: auto;
+    position: sticky;
+    top: 3rem;
+    height: calc(100vh - 3rem - 2rem);
+    transition: background-color 300ms ease, border-color 300ms ease;
+    animation: slideInRight 300ms ease-out;
+}
+
+.sidebar-title {
+    font-family: 'DM Sans', system-ui, sans-serif;
+    font-size: 0.75rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: var(--text-muted);
+    margin-top: 0;
+    margin-bottom: 1em;
+    padding-bottom: 0.6em;
+    border-bottom: 1px solid var(--border-color);
+}
+
+.flag-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.8em;
+}
+
+/* --------------------------------------------------------------------------
+   Flag Styling — In-document flags
+   -------------------------------------------------------------------------- */
+.flag {
+    background-color: var(--flag-bg);
+    border-left: 3px solid var(--flag-border);
+    padding: 0.2em 0.4em;
+    border-radius: 0 3px 3px 0;
+    cursor: pointer;
+    transition: background-color 300ms ease, border-color 300ms ease, box-shadow 300ms ease;
+    position: relative;
+}
+
+.flag:hover {
+    box-shadow: inset 0 0 0 1px var(--flag-border),
+                0 0 8px rgba(230, 168, 23, 0.2);
+}
+
+.flag[data-flag-id]::after {
+    content: attr(data-flag-id);
+    position: absolute;
+    top: -0.4em;
+    right: -0.4em;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 1.2rem;
+    height: 1.2rem;
+    font-family: 'DM Sans', system-ui, sans-serif;
+    font-size: 0.65rem;
+    font-weight: 700;
+    background-color: var(--accent);
+    color: #FFFFFF;
+    border-radius: 999px;
+    padding: 0 0.3em;
+}
+
+/* --------------------------------------------------------------------------
+   Flag Styling — Sidebar items
+   -------------------------------------------------------------------------- */
+.flag-item {
+    padding: 0.8em;
+    background-color: var(--bg-surface);
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    cursor: pointer;
+    transition: background-color 300ms ease, border-color 300ms ease, box-shadow 200ms ease, transform 200ms ease;
+}
+
+.flag-item:hover {
+    border-color: var(--flag-border);
+    box-shadow: var(--shadow-sm);
+    transform: translateX(-2px);
+}
+
+.flag-item-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 0.3em;
+}
+
+.flag-item-id {
+    font-family: 'DM Sans', system-ui, sans-serif;
+    font-size: 0.7rem;
+    font-weight: 700;
+    color: var(--accent);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+
+.flag-item-line {
+    font-family: 'JetBrains Mono', Menlo, monospace;
+    font-size: 0.7rem;
+    color: var(--text-muted);
+}
+
+.flag-item-comment {
+    font-family: 'DM Sans', system-ui, sans-serif;
+    font-size: 0.82rem;
+    color: var(--text);
+    line-height: 1.4;
+}
+
+/* --------------------------------------------------------------------------
+   Flag Toolbar — Floating popup for flag creation
+   -------------------------------------------------------------------------- */
+.flag-toolbar {
+    position: absolute;
+    z-index: 200;
+    display: none;
+    flex-direction: column;
+    gap: 0.5em;
+    padding: 0.8em;
+    background-color: var(--bg-surface);
+    border: 1px solid var(--border-color-strong);
+    border-radius: 8px;
+    box-shadow: var(--shadow-lg);
+    min-width: 260px;
+    animation: fadeIn 150ms ease-out;
+    transition: background-color 300ms ease, border-color 300ms ease;
+}
+
+.flag-toolbar.active {
+    display: flex;
+}
+
+.flag-toolbar-label {
+    font-family: 'DM Sans', system-ui, sans-serif;
+    font-size: 0.75rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--text-muted);
+}
+
+.flag-toolbar-input {
+    font-family: 'DM Sans', system-ui, sans-serif;
+    font-size: 0.85rem;
+    padding: 0.5em 0.7em;
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    background-color: var(--bg);
+    color: var(--text);
+    outline: none;
+    transition: border-color 200ms ease, background-color 300ms ease, color 300ms ease;
+}
+
+.flag-toolbar-input:focus {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 2px rgba(196, 91, 40, 0.15);
+}
+
+.flag-toolbar-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 0.4em;
+}
+
+.flag-toolbar-btn {
+    font-family: 'DM Sans', system-ui, sans-serif;
+    font-size: 0.78rem;
+    font-weight: 600;
+    padding: 0.4em 0.8em;
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    cursor: pointer;
+    transition: background-color 200ms ease, border-color 200ms ease, color 200ms ease;
+}
+
+.flag-toolbar-btn-cancel {
+    background-color: var(--bg);
+    color: var(--text-muted);
+}
+
+.flag-toolbar-btn-cancel:hover {
+    background-color: var(--bg-surface);
+    color: var(--text);
+}
+
+.flag-toolbar-btn-submit {
+    background-color: var(--accent);
+    color: #FFFFFF;
+    border-color: var(--accent);
+}
+
+.flag-toolbar-btn-submit:hover {
+    opacity: 0.9;
+}
+
+/* --------------------------------------------------------------------------
+   Diff Coloring
+   -------------------------------------------------------------------------- */
+.diff-added {
+    background-color: var(--diff-added-bg);
+    color: var(--diff-added-text);
+    transition: background-color 300ms ease, color 300ms ease;
+}
+
+.diff-removed {
+    background-color: var(--diff-removed-bg);
+    color: var(--diff-removed-text);
+    transition: background-color 300ms ease, color 300ms ease;
+}
+
+.diff-hunk {
+    background-color: var(--diff-hunk-bg);
+    color: var(--diff-hunk-text);
+    transition: background-color 300ms ease, color 300ms ease;
+}
+
+/* --------------------------------------------------------------------------
+   Layout — Directory Listing View
+   -------------------------------------------------------------------------- */
+.listing {
+    flex: 1;
+    max-width: 640px;
+    margin: 0 auto;
+    padding: 2.4em 1.4em 4em;
+    animation: fadeIn 400ms ease-out;
+}
+
+.file-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+}
+
+.file-entry {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0.7em 0.8em;
+    border-bottom: 1px solid var(--border-color);
+    font-family: 'DM Sans', system-ui, sans-serif;
+    transition: background-color 200ms ease, border-color 300ms ease;
+    animation: slideInUp 300ms ease-out both;
+}
+
+.file-entry:first-child {
+    border-top: 1px solid var(--border-color);
+}
+
+.file-entry:hover {
+    background-color: var(--bg-surface);
+}
+
+.file-entry-name {
+    display: flex;
+    align-items: center;
+    gap: 0.6em;
+}
+
+.file-entry-icon {
+    font-size: 0.9rem;
+    flex-shrink: 0;
+}
+
+.file-entry-icon.markdown {
+    color: var(--accent);
+}
+
+.file-entry-icon.html {
+    color: var(--link);
+}
+
+.file-entry a {
+    text-decoration: none;
+    color: var(--text);
+    font-weight: 500;
+    font-size: 0.95rem;
+}
+
+.file-entry a:hover {
+    color: var(--accent);
+}
+
+.file-entry-meta {
+    font-size: 0.8rem;
+    color: var(--text-muted);
+    white-space: nowrap;
+}
+
+/* Staggered slide-in for file entries */
+.file-entry:nth-child(1) { animation-delay: 0ms; }
+.file-entry:nth-child(2) { animation-delay: 50ms; }
+.file-entry:nth-child(3) { animation-delay: 100ms; }
+.file-entry:nth-child(4) { animation-delay: 150ms; }
+.file-entry:nth-child(5) { animation-delay: 200ms; }
+.file-entry:nth-child(6) { animation-delay: 250ms; }
+.file-entry:nth-child(7) { animation-delay: 300ms; }
+.file-entry:nth-child(8) { animation-delay: 350ms; }
+.file-entry:nth-child(9) { animation-delay: 400ms; }
+.file-entry:nth-child(10) { animation-delay: 450ms; }
+.file-entry:nth-child(n+11) { animation-delay: 500ms; }
+
+.listing-summary {
+    margin-top: 1.6em;
+    font-family: 'DM Sans', system-ui, sans-serif;
+    font-size: 0.85rem;
+    color: var(--text-muted);
+    text-align: center;
+}
+
+/* --------------------------------------------------------------------------
+   Status Bar
+   -------------------------------------------------------------------------- */
+.status-bar {
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    z-index: 100;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5em;
+    padding: 0.35em 1.4em;
+    background-color: var(--bg-surface);
+    border-top: 1px solid var(--border-color);
+    font-family: 'DM Sans', system-ui, sans-serif;
+    font-size: 0.72rem;
+    color: var(--text-muted);
+    transition: background-color 300ms ease, border-color 300ms ease, color 300ms ease;
+}
+
+.status-separator {
+    color: var(--border-color-strong);
+}
+
+.status-connection {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35em;
+}
+
+.status-dot {
+    display: inline-block;
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background-color: #22C55E;
+    animation: pulse 2s ease-in-out infinite;
+    transition: background-color 300ms ease;
+}
+
+.status-dot.disconnected {
+    background-color: #EF4444;
+    animation: throb 1s ease-in-out infinite;
+}
+
+/* --------------------------------------------------------------------------
+   Animations
+   -------------------------------------------------------------------------- */
+@keyframes fadeIn {
+    from {
+        opacity: 0;
+        transform: translateY(8px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+@keyframes slideInRight {
+    from {
+        opacity: 0;
+        transform: translateX(20px);
+    }
+    to {
+        opacity: 1;
+        transform: translateX(0);
+    }
+}
+
+@keyframes slideInUp {
+    from {
+        opacity: 0;
+        transform: translateY(12px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+@keyframes pulse {
+    0%, 100% {
+        opacity: 1;
+    }
+    50% {
+        opacity: 0.5;
+    }
+}
+
+@keyframes throb {
+    0%, 100% {
+        transform: scale(1);
+        opacity: 1;
+    }
+    50% {
+        transform: scale(1.4);
+        opacity: 0.7;
+    }
+}
+
+/* --------------------------------------------------------------------------
+   Scroll highlight for flag navigation
+   -------------------------------------------------------------------------- */
+.flag-highlight {
+    outline: 2px solid var(--accent);
+    outline-offset: 3px;
+    border-radius: 3px;
+    transition: outline-color 300ms ease;
+}
+
+/* --------------------------------------------------------------------------
+   Error page styling
+   -------------------------------------------------------------------------- */
+.error-page {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    min-height: 60vh;
+    text-align: center;
+    padding: 2em;
+}
+
+.error-code {
+    font-family: 'Playfair Display', Georgia, serif;
+    font-size: 5rem;
+    font-weight: 900;
+    color: var(--accent);
+    line-height: 1;
+    margin-bottom: 0.2em;
+}
+
+.error-message {
+    font-family: 'DM Sans', system-ui, sans-serif;
+    font-size: 1.1rem;
+    color: var(--text-muted);
+    max-width: 40ch;
+}
+
+/* --------------------------------------------------------------------------
+   Responsive — Hide sidebar below 900px
+   -------------------------------------------------------------------------- */
+@media (max-width: 900px) {
+    .sidebar {
+        display: none;
+    }
+
+    .document {
+        max-width: 100%;
+    }
+
+    .top-bar {
+        padding: 0.5em 1em;
+    }
+
+    .file-path {
+        max-width: 40vw;
+    }
+
+    .flag-toolbar {
+        min-width: 200px;
+    }
+}
+
+@media (max-width: 600px) {
+    h1 {
+        font-size: 1.8rem;
+    }
+
+    h2 {
+        font-size: 1.4rem;
+    }
+
+    h3 {
+        font-size: 1.15rem;
+    }
+
+    .document {
+        padding: 1.6em 1em 4em;
+    }
+
+    .listing {
+        padding: 1.6em 1em 4em;
+    }
+
+    .status-bar {
+        font-size: 0.65rem;
+        padding: 0.3em 0.8em;
+    }
+
+    pre {
+        padding: 0.8em 1em;
+        font-size: 0.8rem;
+    }
+}
+
+/* --------------------------------------------------------------------------
+   Print styles
+   -------------------------------------------------------------------------- */
+@media print {
+    .top-bar,
+    .sidebar,
+    .status-bar,
+    .flag-toolbar,
+    .theme-toggle,
+    .flag-count {
+        display: none !important;
+    }
+
+    body {
+        background: white;
+        color: black;
+    }
+
+    .document {
+        max-width: 100%;
+        padding: 0;
+    }
+
+    a {
+        color: black;
+        text-decoration: underline;
+    }
+
+    pre {
+        border: 1px solid #ccc;
+    }
+}

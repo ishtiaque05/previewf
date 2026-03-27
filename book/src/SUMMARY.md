@@ -40,6 +40,10 @@
 - [Contributing](development/contributing.md)
 - [CI/CD](development/ci-cd.md)
 
+# Implementation Log
+
+- [Implementation Notes](implementation/notes.md)
+
 ---
 
 [Roadmap](roadmap.md)
