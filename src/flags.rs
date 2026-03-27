@@ -22,12 +22,13 @@ pub struct FlagReport {
     pub flags: Vec<Flag>,
 }
 
-/// Sanitize a comment string to prevent flag tag corruption and HTML injection.
-/// Escapes `</flag>`, `<flag:`, and HTML angle brackets.
+/// Sanitize a comment string to prevent flag tag corruption.
+/// Escapes `</flag>`, `<flag:`, and bare angle brackets to prevent tag nesting.
+/// General HTML escaping (`&`, `"`, `'`) is NOT done here; `render_flags` handles that later.
 fn sanitize_comment(comment: &str) -> String {
     comment
-        .replace("</flag>", "&lt;/flag&gt;")
-        .replace("<flag:", "&lt;flag:")
+        .replace("</flag>", "[/flag]")
+        .replace("<flag:", "[flag:")
         .replace('<', "&lt;")
         .replace('>', "&gt;")
 }

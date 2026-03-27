@@ -11,6 +11,7 @@ use serde::Deserialize;
 use tokio::sync::broadcast;
 
 use crate::flags::{extract_flags, inject_flag, FlagReport};
+use crate::html;
 use crate::markdown::render_html;
 use crate::PreviewError;
 
@@ -212,7 +213,7 @@ async fn index_handler(State(state): State<AppState>) -> Response {
     let mut file_entries_parts: Vec<String> = Vec::new();
 
     for (name, flag_count) in &md_files {
-        let safe_name = html_escape(name);
+        let safe_name = html::escape(name);
         let badge = if *flag_count > 0 {
             format!(
                 r#"<span class="file-entry-badge has-flags">{} flag{}</span>"#,
@@ -228,7 +229,7 @@ async fn index_handler(State(state): State<AppState>) -> Response {
     }
 
     for name in &html_files {
-        let safe_name = html_escape(name);
+        let safe_name = html::escape(name);
         file_entries_parts.push(format!(
             r#"<a class="file-entry" href="/raw/{safe_name}"><span><span class="file-entry-icon">&#9671;</span><span class="file-entry-name">{safe_name}</span></span><span class="file-entry-badge">(html)</span></a>"#,
         ));
@@ -248,7 +249,7 @@ async fn index_handler(State(state): State<AppState>) -> Response {
         .unwrap_or_else(|| "<html><body>Template missing</body></html>".to_string());
 
     let html = template
-        .replace("{{directory}}", &html_escape(&dir_display))
+        .replace("{{directory}}", &html::escape(&dir_display))
         .replace("{{file_entries}}", &file_entries)
         .replace("{{summary}}", &summary);
 
@@ -284,8 +285,8 @@ async fn view_handler(
     let title = filepath.rsplit('/').next().unwrap_or(&filepath).to_string();
 
     let html = template
-        .replace("{{title}}", &html_escape(&title))
-        .replace("{{filepath}}", &html_escape(&filepath))
+        .replace("{{title}}", &html::escape(&title))
+        .replace("{{filepath}}", &html::escape(&filepath))
         .replace("{{content}}", &rendered);
 
     Html(html).into_response()
@@ -470,15 +471,8 @@ fn is_markdown(name: &str) -> bool {
 fn not_found_response(filepath: &str) -> Response {
     (
         StatusCode::NOT_FOUND,
-        format!("File not found: {}", html_escape(filepath)),
+        format!("File not found: {}", html::escape(filepath)),
     )
         .into_response()
 }
 
-fn html_escape(s: &str) -> String {
-    s.replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('"', "&quot;")
-        .replace('\'', "&#39;")
-}

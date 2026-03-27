@@ -3,6 +3,8 @@
 use std::sync::LazyLock;
 
 use regex::Regex;
+
+use crate::html;
 use syntect::highlighting::ThemeSet;
 use syntect::html::highlighted_html_for_string;
 use syntect::parsing::SyntaxSet;
@@ -47,7 +49,7 @@ fn highlight_code_blocks(html: &str) -> String {
     CODE_BLOCK_RE
         .replace_all(html, |caps: &regex::Captures| {
             let lang = &caps[1];
-            let code = html_escape_decode(&caps[2]);
+            let code = html::unescape(&caps[2]);
 
             if lang == "diff" {
                 return caps[0].to_string();
@@ -72,18 +74,18 @@ fn highlight_code_blocks(html: &str) -> String {
 fn render_diff_blocks(html: &str) -> String {
     DIFF_BLOCK_RE
         .replace_all(html, |caps: &regex::Captures| {
-            let raw = html_escape_decode(&caps[1]);
+            let raw = html::unescape(&caps[1]);
             let mut lines_html = String::new();
 
             for line in raw.lines() {
                 let (class, escaped) = if line.starts_with('+') {
-                    ("diff-added", html_escape_encode(line))
+                    ("diff-added", html::escape(line))
                 } else if line.starts_with('-') {
-                    ("diff-removed", html_escape_encode(line))
+                    ("diff-removed", html::escape(line))
                 } else if line.starts_with("@@") {
-                    ("diff-hunk", html_escape_encode(line))
+                    ("diff-hunk", html::escape(line))
                 } else {
-                    ("diff-context", html_escape_encode(line))
+                    ("diff-context", html::escape(line))
                 };
                 lines_html.push_str(&format!("<span class=\"{class}\">{escaped}</span>\n"));
             }
@@ -97,7 +99,7 @@ fn render_flags(html: &str) -> String {
     FLAG_RE
         .replace_all(html, |caps: &regex::Captures| {
             let id = &caps[1];
-            let comment = html_escape_encode(caps[2].trim());
+            let comment = html::escape(caps[2].trim());
             format!(
                 "<span class=\"flag\" data-flag-id=\"{id}\">\
                  <span class=\"flag-marker\">#{id}</span>\
@@ -108,21 +110,6 @@ fn render_flags(html: &str) -> String {
         .into_owned()
 }
 
-fn html_escape_decode(s: &str) -> String {
-    s.replace("&lt;", "<")
-        .replace("&gt;", ">")
-        .replace("&quot;", "\"")
-        .replace("&#39;", "'")
-        .replace("&amp;", "&")
-}
-
-fn html_escape_encode(s: &str) -> String {
-    s.replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('"', "&quot;")
-        .replace('\'', "&#39;")
-}
 
 #[cfg(test)]
 mod tests {
@@ -132,8 +119,8 @@ mod tests {
     #[gtest]
     fn test_html_escape_roundtrip() {
         let original = "<p>Hello & \"world\"</p>";
-        let encoded = html_escape_encode(original);
-        let decoded = html_escape_decode(&encoded);
+        let encoded = html::escape(original);
+        let decoded = html::unescape(&encoded);
         expect_that!(decoded, eq(original));
     }
 
@@ -160,7 +147,7 @@ mod tests {
     fn test_html_escape_decode_no_double_decode() {
         // Source code containing literal "&lt;" should survive encode→decode roundtrip
         let input = "&amp;lt;script&amp;gt;";
-        let decoded = html_escape_decode(input);
+        let decoded = html::unescape(input);
         expect_that!(decoded, eq("&lt;script&gt;"));
     }
 }
