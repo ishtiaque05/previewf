@@ -1,6 +1,8 @@
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 
+use crate::PreviewError;
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Flag {
     pub id: u32,
@@ -42,6 +44,35 @@ pub fn extract_flags(content: &str) -> Vec<Flag> {
 pub fn next_flag_id(content: &str) -> u32 {
     let flags = extract_flags(content);
     flags.iter().map(|f| f.id).max().unwrap_or(0) + 1
+}
+
+/// Inject a new flag at the given line number (1-indexed).
+pub fn inject_flag(content: &str, line: usize, comment: &str) -> Result<String, PreviewError> {
+    let lines: Vec<&str> = content.lines().collect();
+
+    if line == 0 || line > lines.len() {
+        return Err(PreviewError::FlagParse {
+            line,
+            detail: format!(
+                "Line {} is out of range (file has {} lines)",
+                line,
+                lines.len()
+            ),
+        });
+    }
+
+    let next_id = next_flag_id(content);
+    let flag_tag = format!(" <flag:{}>Comment: {}</flag>", next_id, comment);
+
+    let mut result: Vec<String> = lines.iter().map(|l| l.to_string()).collect();
+    result[line - 1].push_str(&flag_tag);
+
+    let mut output = result.join("\n");
+    if content.ends_with('\n') {
+        output.push('\n');
+    }
+
+    Ok(output)
 }
 
 /// Format flags as human-readable text output.
