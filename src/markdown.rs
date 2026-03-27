@@ -89,11 +89,12 @@ fn render_flags(html: &str) -> String {
 
     re.replace_all(html, |caps: &regex::Captures| {
         let id = &caps[1];
-        let text = &caps[2];
+        let comment = caps[2].trim();
         format!(
-            "<span class=\"flag-marker\" data-flag-id=\"{id}\" \
-             title=\"Flag #{id}\">\
-             <span class=\"flag-icon\">&#9873;</span> {text}</span>"
+            "<span class=\"flag\" data-flag-id=\"{id}\">\
+             <span class=\"flag-marker\">#{id}</span>\
+             <span class=\"flag-comment\">{comment}</span>\
+             </span>"
         )
     })
     .into_owned()
@@ -133,7 +134,10 @@ mod tests {
     fn test_render_flags_basic() {
         let input = "<flag:1>Comment: something</flag>";
         let result = render_flags(input);
+        assert!(result.contains("class=\"flag\""));
         assert!(result.contains("data-flag-id=\"1\""));
+        assert!(result.contains("class=\"flag-marker\""));
+        assert!(result.contains("class=\"flag-comment\""));
         assert!(result.contains("something"));
     }
 }
