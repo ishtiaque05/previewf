@@ -4,6 +4,7 @@ use std::sync::LazyLock;
 
 use regex::Regex;
 
+use crate::flags::FLAG_RE;
 use crate::html;
 use syntect::highlighting::ThemeSet;
 use syntect::html::highlighted_html_for_string;
@@ -16,9 +17,6 @@ static CODE_BLOCK_RE: LazyLock<Regex> = LazyLock::new(|| {
 static DIFF_BLOCK_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r#"<pre><code class="language-diff">([\s\S]*?)</code></pre>"#).unwrap()
 });
-
-static FLAG_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"<flag:(\d+)>Comment:\s*(.+?)</flag>").unwrap());
 
 static SYNTAX_SET: LazyLock<SyntaxSet> = LazyLock::new(SyntaxSet::load_defaults_newlines);
 static THEME_SET: LazyLock<ThemeSet> = LazyLock::new(ThemeSet::load_defaults);

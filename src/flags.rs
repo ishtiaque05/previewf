@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::PreviewError;
 
-static FLAG_RE: LazyLock<Regex> =
+pub static FLAG_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"<flag:(\d+)>Comment:\s*(.+?)</flag>").unwrap());
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
