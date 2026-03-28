@@ -112,7 +112,12 @@ pub fn inject_flag(content: &str, line: usize, comment: &str) -> Result<String, 
 /// Remove a flag by ID from the content.
 /// Returns the content with the flag tag stripped, preserving surrounding text.
 pub fn remove_flag(content: &str, id: u32) -> Result<String, PreviewError> {
-    let target = Regex::new(&format!(r"<flag:{id}>Comment:\s*.+?</flag>")).unwrap();
+    let target = Regex::new(&format!(r"<flag:{id}>Comment:\s*.+?</flag>")).map_err(|e| {
+        PreviewError::FlagParse {
+            line: 0,
+            detail: format!("Invalid flag regex for ID {id}: {e}"),
+        }
+    })?;
     let mut found = false;
 
     let result: Vec<String> = content
@@ -148,7 +153,12 @@ pub fn update_flag_comment(
     id: u32,
     new_comment: &str,
 ) -> Result<String, PreviewError> {
-    let target = Regex::new(&format!(r"<flag:{id}>Comment:\s*.+?</flag>")).unwrap();
+    let target = Regex::new(&format!(r"<flag:{id}>Comment:\s*.+?</flag>")).map_err(|e| {
+        PreviewError::FlagParse {
+            line: 0,
+            detail: format!("Invalid flag regex for ID {id}: {e}"),
+        }
+    })?;
     let sanitized = sanitize_comment(new_comment);
     let replacement = format!("<flag:{id}>Comment: {sanitized}</flag>");
     let mut found = false;
@@ -158,7 +168,9 @@ pub fn update_flag_comment(
         .map(|line| {
             if target.is_match(line) {
                 found = true;
-                target.replace_all(line, replacement.as_str()).to_string()
+                target
+                    .replace_all(line, regex::NoExpand(replacement.as_str()))
+                    .to_string()
             } else {
                 line.to_string()
             }
