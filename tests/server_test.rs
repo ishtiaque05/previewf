@@ -709,6 +709,43 @@ async fn test_flag_put_empty_comment_returns_400() {
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 }
 
+// --- Flag DELETE/PUT path traversal ---
+
+#[tokio::test]
+async fn test_flag_delete_path_traversal_returns_404() {
+    let app = create_test_app();
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri("/flag/1/../../etc/shadow.md")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn test_flag_put_path_traversal_returns_404() {
+    let app = create_test_app();
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("PUT")
+                .uri("/flag/1/../../etc/shadow.md")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({ "comment": "traversal" }).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
 // --- Security headers ---
 
 #[tokio::test]
