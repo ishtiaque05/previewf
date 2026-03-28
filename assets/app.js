@@ -49,7 +49,6 @@
         // Listen for OS-level theme changes
         if (window.matchMedia) {
             window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', function (e) {
-                // Only follow OS preference if user hasn't manually set a theme
                 var stored = localStorage.getItem(THEME_KEY);
                 if (!stored) {
                     applyTheme(e.matches ? 'dark' : 'light');
@@ -59,7 +58,215 @@
     }
 
     /* ----------------------------------------------------------------------
-       2. Flag Sidebar Population
+       2. Navigation Sidebar (File Tree)
+       ---------------------------------------------------------------------- */
+
+    var NAV_KEY = 'previewf-nav';
+    var NAV_OPEN_DIRS_KEY = 'previewf-nav-open';
+
+    function initNavSidebar() {
+        var sidebar = document.getElementById('nav-sidebar');
+        var toggle = document.getElementById('nav-toggle');
+        var treeEl = document.getElementById('nav-tree');
+        if (!sidebar || !toggle) return;
+
+        // Restore collapsed state
+        var navState = localStorage.getItem(NAV_KEY);
+        if (navState === 'collapsed') {
+            sidebar.classList.add('collapsed');
+        }
+
+        toggle.addEventListener('click', function () {
+            sidebar.classList.toggle('collapsed');
+            localStorage.setItem(NAV_KEY, sidebar.classList.contains('collapsed') ? 'collapsed' : 'open');
+        });
+
+        // Fetch and render tree
+        if (treeEl) {
+            fetch('/api/tree')
+                .then(function (r) {
+                    if (!r.ok) throw new Error('Tree API returned ' + r.status);
+                    return r.json();
+                })
+                .then(function (tree) {
+                    renderTree(treeEl, tree, 0);
+                    highlightCurrentFile();
+                })
+                .catch(function (err) {
+                    console.warn('Failed to load file tree:', err);
+                });
+        }
+    }
+
+    function getOpenDirs() {
+        try {
+            var stored = localStorage.getItem(NAV_OPEN_DIRS_KEY);
+            return stored ? JSON.parse(stored) : {};
+        } catch (e) {
+            return {};
+        }
+    }
+
+    function saveOpenDirs(dirs) {
+        localStorage.setItem(NAV_OPEN_DIRS_KEY, JSON.stringify(dirs));
+    }
+
+    function renderTree(container, nodes, depth) {
+        var openDirs = getOpenDirs();
+
+        for (var i = 0; i < nodes.length; i++) {
+            var node = nodes[i];
+
+            if (node.type === 'dir') {
+                renderDirNode(container, node, depth, openDirs);
+            } else {
+                renderFileNode(container, node, depth);
+            }
+        }
+    }
+
+    function renderDirNode(container, node, depth, openDirs) {
+        var isOpen = openDirs[node.path] === true;
+
+        // Directory row
+        var row = document.createElement('div');
+        row.className = 'tree-item tree-depth-' + Math.min(depth, 5);
+        row.setAttribute('data-path', node.path);
+
+        var arrow = document.createElement('span');
+        arrow.className = 'tree-item-icon dir-arrow' + (isOpen ? ' open' : '');
+        arrow.textContent = '\u25B6'; // right triangle
+        row.appendChild(arrow);
+
+        var icon = document.createElement('span');
+        icon.className = 'tree-item-icon tree-icon-dir';
+        icon.textContent = '\uD83D\uDCC1'; // folder emoji
+        row.appendChild(icon);
+
+        var name = document.createElement('span');
+        name.className = 'tree-item-name';
+        name.textContent = node.name;
+        row.appendChild(name);
+
+        container.appendChild(row);
+
+        // Children container
+        var childrenEl = document.createElement('div');
+        childrenEl.className = 'tree-children' + (isOpen ? ' open' : '');
+        container.appendChild(childrenEl);
+
+        if (node.children && node.children.length > 0) {
+            renderTree(childrenEl, node.children, depth + 1);
+        }
+
+        // Toggle on click
+        row.addEventListener('click', function () {
+            var dirs = getOpenDirs();
+            var nowOpen = !childrenEl.classList.contains('open');
+            childrenEl.classList.toggle('open');
+            arrow.classList.toggle('open');
+            dirs[node.path] = nowOpen;
+            saveOpenDirs(dirs);
+        });
+    }
+
+    function encodeFilePath(p) {
+        return p.split('/').map(encodeURIComponent).join('/');
+    }
+
+    function renderFileNode(container, node, depth) {
+        var link = document.createElement('a');
+        link.className = 'tree-item tree-depth-' + Math.min(depth, 5);
+
+        // Determine href based on type
+        var encodedPath = encodeFilePath(node.path);
+        if (node.type === 'md' || node.type === 'json') {
+            link.href = '/view/' + encodedPath;
+        } else if (node.type === 'html') {
+            link.href = '/raw/' + encodedPath;
+        }
+
+        var icon = document.createElement('span');
+        icon.className = 'tree-item-icon';
+        if (node.type === 'md') {
+            icon.className += ' tree-icon-md';
+            icon.textContent = '\u25C6'; // diamond
+        } else if (node.type === 'json') {
+            icon.className += ' tree-icon-json';
+            icon.textContent = '{}';
+        } else {
+            icon.className += ' tree-icon-html';
+            icon.textContent = '\u25C7'; // open diamond
+        }
+        link.appendChild(icon);
+
+        var name = document.createElement('span');
+        name.className = 'tree-item-name';
+        name.textContent = node.name;
+        link.appendChild(name);
+
+        container.appendChild(link);
+    }
+
+    function highlightCurrentFile() {
+        var path = window.location.pathname;
+        // Extract the file/dir path from the URL
+        var match = path.match(/^\/(view|raw|browse)\/(.+)$/);
+        if (!match) return;
+
+        var filePath = match[2];
+
+        // Highlight matching tree item
+        var items = document.querySelectorAll('.tree-item[data-path]');
+        for (var i = 0; i < items.length; i++) {
+            if (items[i].getAttribute('data-path') === filePath) {
+                items[i].classList.add('active');
+            }
+        }
+
+        // Also highlight file links
+        var links = document.querySelectorAll('a.tree-item');
+        for (var j = 0; j < links.length; j++) {
+            var href = links[j].getAttribute('href');
+            if (href === path) {
+                links[j].classList.add('active');
+            }
+        }
+
+        // Auto-expand parent directories
+        var parts = filePath.split('/');
+        var openDirs = getOpenDirs();
+        var changed = false;
+        var accumulated = '';
+        for (var k = 0; k < parts.length - 1; k++) {
+            accumulated = accumulated ? accumulated + '/' + parts[k] : parts[k];
+            if (!openDirs[accumulated]) {
+                openDirs[accumulated] = true;
+                changed = true;
+            }
+        }
+        if (changed) {
+            saveOpenDirs(openDirs);
+            // Re-open the expanded dirs in DOM
+            var allArrows = document.querySelectorAll('.tree-item[data-path]');
+            for (var m = 0; m < allArrows.length; m++) {
+                var p = allArrows[m].getAttribute('data-path');
+                if (openDirs[p]) {
+                    var arrowEl = allArrows[m].querySelector('.dir-arrow');
+                    var sibling = allArrows[m].nextElementSibling;
+                    if (arrowEl && !arrowEl.classList.contains('open')) {
+                        arrowEl.classList.add('open');
+                    }
+                    if (sibling && sibling.classList.contains('tree-children') && !sibling.classList.contains('open')) {
+                        sibling.classList.add('open');
+                    }
+                }
+            }
+        }
+    }
+
+    /* ----------------------------------------------------------------------
+       3. Flag Sidebar Population
        ---------------------------------------------------------------------- */
 
     function initFlagSidebar() {
@@ -150,7 +357,7 @@
     }
 
     /* ----------------------------------------------------------------------
-       3. Flag Creation Toolbar
+       4. Flag Creation Toolbar
        ---------------------------------------------------------------------- */
 
     var toolbar = null;
@@ -160,10 +367,17 @@
         var documentEl = document.getElementById('document');
         if (!documentEl) return;
 
-        // Extract filepath from the top bar
-        var filePathEl = document.querySelector('.file-path');
-        if (filePathEl) {
-            currentFilepath = filePathEl.textContent.trim();
+        // Extract filepath from breadcrumb
+        var breadcrumbCurrent = document.querySelector('.breadcrumb-current');
+        var breadcrumbLinks = document.querySelectorAll('.breadcrumb-link');
+        if (breadcrumbCurrent) {
+            // Build path from breadcrumb links + current
+            var parts = [];
+            for (var i = 1; i < breadcrumbLinks.length; i++) { // skip 'root'
+                parts.push(breadcrumbLinks[i].textContent.trim());
+            }
+            parts.push(breadcrumbCurrent.textContent.trim());
+            currentFilepath = parts.join('/');
         }
 
         // Create the toolbar element
@@ -213,7 +427,6 @@
                 positionToolbar(e.clientX, e.clientY);
                 toolbar.classList.add('active');
                 input.value = '';
-                // Defer focus so toolbar appears first
                 setTimeout(function () {
                     input.focus();
                 }, 50);
@@ -260,9 +473,8 @@
         var scrollY = window.scrollY || window.pageYOffset;
 
         var left = x + scrollX;
-        var top = y + scrollY + 10; // Slightly below the cursor
+        var top = y + scrollY + 10;
 
-        // Keep toolbar within viewport horizontally
         var toolbarWidth = 280;
         if (left + toolbarWidth > document.documentElement.scrollWidth) {
             left = document.documentElement.scrollWidth - toolbarWidth - 16;
@@ -300,7 +512,6 @@
         })
         .then(function (response) {
             if (response.ok) {
-                // Reload to show the new flag
                 window.location.reload();
             } else {
                 response.text().then(function (text) {
@@ -337,7 +548,7 @@
     }
 
     /* ----------------------------------------------------------------------
-       4. WebSocket Live Reload
+       5. WebSocket Live Reload
        ---------------------------------------------------------------------- */
 
     var ws = null;
@@ -353,12 +564,10 @@
 
             if (connected) {
                 statusDot.classList.remove('disconnected');
-                // Update the text node — find text node after the dot
                 var textNode = statusDot.nextSibling;
                 if (textNode && textNode.nodeType === Node.TEXT_NODE) {
                     textNode.textContent = '\n            connected\n        ';
                 } else {
-                    // Replace text content safely: rebuild children
                     while (statusConnection.lastChild && statusConnection.lastChild !== statusDot) {
                         statusConnection.removeChild(statusConnection.lastChild);
                     }
@@ -381,7 +590,6 @@
         }
 
         function connect() {
-            // Build the WebSocket URL from the current page location
             var protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
             var wsUrl = protocol + '//' + window.location.host + '/ws';
 
@@ -439,6 +647,7 @@
 
     document.addEventListener('DOMContentLoaded', function () {
         initTheme();
+        initNavSidebar();
         initFlagSidebar();
         initFlagToolbar();
         initWebSocket();

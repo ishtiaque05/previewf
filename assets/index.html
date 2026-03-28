@@ -12,8 +12,10 @@
 <body>
     <header class="top-bar">
         <div class="top-bar-left">
-            <span class="logo">previewf</span>
-            <span class="file-path">{{directory}}</span>
+            <button class="nav-toggle" id="nav-toggle" aria-label="Toggle navigation">
+                <span class="nav-toggle-icon">&#9776;</span>
+            </button>
+            <a class="logo" href="/">previewf</a>
         </div>
         <div class="top-bar-right">
             <button class="theme-toggle" id="theme-toggle" aria-label="Toggle theme">
@@ -22,14 +24,25 @@
             </button>
         </div>
     </header>
-    <main class="listing">
-        <div class="file-list">
-            {{file_entries}}
-        </div>
-        <div class="listing-summary">
-            {{summary}}
-        </div>
-    </main>
+    <div class="app-layout">
+        <nav class="nav-sidebar" id="nav-sidebar">
+            <div class="nav-sidebar-header">
+                <span class="nav-sidebar-title">Files</span>
+            </div>
+            <div class="nav-tree" id="nav-tree"></div>
+        </nav>
+        <main class="main-content">
+            {{breadcrumbs}}
+            <div class="listing">
+                <div class="file-list">
+                    {{file_entries}}
+                </div>
+                <div class="listing-summary">
+                    {{summary}}
+                </div>
+            </div>
+        </main>
+    </div>
     <footer class="status-bar">
         <span>previewf v0.1.0</span>
         <span class="status-separator">&middot;</span>

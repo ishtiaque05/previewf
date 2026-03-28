@@ -35,34 +35,34 @@
 }
 
 /* --------------------------------------------------------------------------
-   CSS Custom Properties — Dark theme ("Midnight Ink")
+   CSS Custom Properties — Dark theme ("Hacker Terminal")
    -------------------------------------------------------------------------- */
 [data-theme="dark"] {
-    --bg: #1A1A2E;
-    --bg-surface: #16213E;
-    --text: #E8E6E3;
-    --text-muted: #8B8FA3;
-    --accent: #E8845A;
-    --flag-bg: #3D2E1F;
-    --flag-border: #D4952B;
-    --code-bg: #0F0F23;
-    --link: #4ECDC4;
-    --sidebar-bg: #12122A;
+    --bg: #0d1117;
+    --bg-surface: #161b22;
+    --text: #e6edf3;
+    --text-muted: #8b949e;
+    --accent: #3fb950;
+    --flag-bg: #1a2e1a;
+    --flag-border: #3fb950;
+    --code-bg: #0d1117;
+    --link: #58a6ff;
+    --sidebar-bg: #010409;
 
     /* Diff colors — dark */
-    --diff-added-bg: #1B3829;
-    --diff-added-text: #3FB950;
-    --diff-removed-bg: #3D1F1F;
-    --diff-removed-text: #F85149;
-    --diff-hunk-bg: #2D1F4E;
-    --diff-hunk-text: #BC8CFF;
+    --diff-added-bg: #12261e;
+    --diff-added-text: #3fb950;
+    --diff-removed-bg: #2d1117;
+    --diff-removed-text: #f85149;
+    --diff-hunk-bg: #1b1836;
+    --diff-hunk-text: #bc8cff;
 
     /* Shadows and borders */
-    --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.2);
-    --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.3);
-    --shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.4);
-    --border-color: #2A2A45;
-    --border-color-strong: #3A3A5A;
+    --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
+    --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.4);
+    --shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.5);
+    --border-color: #21262d;
+    --border-color-strong: #30363d;
 }
 
 /* --------------------------------------------------------------------------
@@ -313,12 +313,34 @@ img {
     flex-shrink: 0;
 }
 
+.nav-toggle {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 2rem;
+    height: 2rem;
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    background: var(--bg);
+    color: var(--text-muted);
+    cursor: pointer;
+    font-size: 1rem;
+    transition: background-color 200ms ease, border-color 200ms ease, color 200ms ease;
+}
+
+.nav-toggle:hover {
+    background-color: var(--bg-surface);
+    border-color: var(--accent);
+    color: var(--accent);
+}
+
 .logo {
     font-weight: 700;
     font-size: 1rem;
     color: var(--accent);
     letter-spacing: -0.02em;
     white-space: nowrap;
+    text-decoration: none;
 }
 
 .file-path {
@@ -632,13 +654,184 @@ img {
 }
 
 /* --------------------------------------------------------------------------
+   Breadcrumbs
+   -------------------------------------------------------------------------- */
+.breadcrumbs {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 0.15em;
+    padding: 0.7em 1.4em;
+    font-family: 'JetBrains Mono', Menlo, monospace;
+    font-size: 0.82rem;
+    background-color: var(--bg-surface);
+    border-bottom: 1px solid var(--border-color);
+    transition: background-color 300ms ease, border-color 300ms ease;
+}
+
+.breadcrumb-link {
+    color: var(--link);
+    text-decoration: none;
+    padding: 0.15em 0.3em;
+    border-radius: 3px;
+    transition: background-color 200ms ease, color 200ms ease;
+}
+
+.breadcrumb-link:hover {
+    background-color: var(--code-bg);
+    color: var(--accent);
+    text-decoration: none;
+}
+
+.breadcrumb-sep {
+    color: var(--text-muted);
+    opacity: 0.5;
+    margin: 0 0.1em;
+    user-select: none;
+}
+
+.breadcrumb-current {
+    color: var(--text);
+    font-weight: 600;
+    padding: 0.15em 0.3em;
+}
+
+/* --------------------------------------------------------------------------
+   App Layout — Sidebar + Main Content
+   -------------------------------------------------------------------------- */
+.app-layout {
+    display: flex;
+    flex: 1;
+    min-height: 0;
+    overflow: hidden;
+}
+
+.main-content {
+    flex: 1;
+    min-width: 0;
+    overflow-y: auto;
+    height: calc(100vh - 3rem - 2rem);
+}
+
+/* --------------------------------------------------------------------------
+   Navigation Sidebar (File Tree)
+   -------------------------------------------------------------------------- */
+.nav-sidebar {
+    width: 260px;
+    flex-shrink: 0;
+    background-color: var(--sidebar-bg);
+    border-right: 1px solid var(--border-color);
+    overflow-y: auto;
+    height: calc(100vh - 3rem - 2rem);
+    transition: width 250ms ease, background-color 300ms ease, border-color 300ms ease;
+    font-family: 'DM Sans', system-ui, sans-serif;
+    font-size: 0.82rem;
+}
+
+.nav-sidebar.collapsed {
+    width: 0;
+    overflow: hidden;
+    border-right: none;
+}
+
+.nav-sidebar-header {
+    padding: 0.8em 1em;
+    border-bottom: 1px solid var(--border-color);
+    transition: border-color 300ms ease;
+}
+
+.nav-sidebar-title {
+    font-size: 0.7rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: var(--text-muted);
+}
+
+.nav-tree {
+    padding: 0.4em 0;
+}
+
+/* Tree items */
+.tree-item {
+    display: flex;
+    align-items: center;
+    gap: 0.35em;
+    padding: 0.3em 0.8em 0.3em 0;
+    cursor: pointer;
+    color: var(--text-muted);
+    text-decoration: none;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    transition: background-color 150ms ease, color 150ms ease;
+    border-radius: 3px;
+    margin: 1px 4px;
+}
+
+.tree-item:hover {
+    background-color: var(--bg-surface);
+    color: var(--text);
+    text-decoration: none;
+}
+
+.tree-item.active {
+    background-color: var(--bg-surface);
+    color: var(--accent);
+    font-weight: 600;
+}
+
+.tree-item-icon {
+    flex-shrink: 0;
+    width: 1em;
+    text-align: center;
+    font-size: 0.75rem;
+}
+
+.tree-item-icon.dir-arrow {
+    color: var(--text-muted);
+    font-size: 0.6rem;
+    transition: transform 200ms ease;
+}
+
+.tree-item-icon.dir-arrow.open {
+    transform: rotate(90deg);
+}
+
+.tree-item-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.tree-children {
+    display: none;
+}
+
+.tree-children.open {
+    display: block;
+}
+
+/* Indent levels via padding-left on tree-item */
+.tree-depth-0 { padding-left: 0.8em; }
+.tree-depth-1 { padding-left: 1.8em; }
+.tree-depth-2 { padding-left: 2.8em; }
+.tree-depth-3 { padding-left: 3.8em; }
+.tree-depth-4 { padding-left: 4.8em; }
+.tree-depth-5 { padding-left: 5.8em; }
+
+/* File type colors in tree */
+.tree-icon-md { color: var(--accent); }
+.tree-icon-json { color: var(--link); font-family: 'JetBrains Mono', monospace; font-size: 0.65rem; font-weight: 700; }
+.tree-icon-html { color: var(--text-muted); }
+.tree-icon-dir { color: var(--text-muted); }
+
+/* --------------------------------------------------------------------------
    Layout — Directory Listing View
    -------------------------------------------------------------------------- */
 .listing {
-    flex: 1;
-    max-width: 640px;
+    max-width: 720px;
     margin: 0 auto;
-    padding: 2.4em 1.4em 4em;
+    padding: 2em 1.4em 4em;
     animation: fadeIn 400ms ease-out;
 }
 
@@ -652,9 +845,13 @@ img {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: 0.7em 0.8em;
+    padding: 0.65em 0.9em;
     border-bottom: 1px solid var(--border-color);
     font-family: 'DM Sans', system-ui, sans-serif;
+    text-decoration: none;
+    color: var(--text);
+    font-weight: 500;
+    font-size: 0.95rem;
     transition: background-color 200ms ease, border-color 300ms ease;
     animation: slideInUp 300ms ease-out both;
 }
@@ -665,12 +862,21 @@ img {
 
 .file-entry:hover {
     background-color: var(--bg-surface);
+    color: var(--accent);
+    text-decoration: none;
 }
 
-.file-entry-name {
+.file-entry-name-group {
     display: flex;
     align-items: center;
     gap: 0.6em;
+    min-width: 0;
+}
+
+.file-entry-name {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
 
 .file-entry-icon {
@@ -678,23 +884,61 @@ img {
     flex-shrink: 0;
 }
 
-.file-entry-icon.markdown {
+.dir-icon {
+    font-size: 1rem;
+}
+
+.md-icon {
     color: var(--accent);
 }
 
-.file-entry-icon.html {
+.json-icon {
+    font-family: 'JetBrains Mono', Menlo, monospace;
+    font-size: 0.75rem;
+    font-weight: 700;
     color: var(--link);
 }
 
-.file-entry a {
-    text-decoration: none;
-    color: var(--text);
-    font-weight: 500;
-    font-size: 0.95rem;
+.html-icon {
+    color: var(--text-muted);
 }
 
-.file-entry a:hover {
+.file-entry-dir {
+    font-weight: 600;
+}
+
+.file-entry-badge {
+    font-family: 'DM Sans', system-ui, sans-serif;
+    font-size: 0.72rem;
+    color: var(--text-muted);
+    white-space: nowrap;
+    flex-shrink: 0;
+    padding: 0.15em 0.5em;
+    border-radius: 3px;
+}
+
+.file-entry-badge.has-flags {
+    background-color: var(--flag-bg);
+    border: 1px solid var(--flag-border);
     color: var(--accent);
+    font-weight: 600;
+}
+
+.dir-badge {
+    background-color: var(--code-bg);
+    color: var(--text-muted);
+}
+
+.json-badge {
+    background-color: var(--code-bg);
+    color: var(--link);
+    font-family: 'JetBrains Mono', Menlo, monospace;
+    font-weight: 600;
+}
+
+.html-badge {
+    background-color: var(--code-bg);
+    color: var(--text-muted);
 }
 
 .file-entry-meta {
@@ -867,11 +1111,26 @@ img {
 }
 
 /* --------------------------------------------------------------------------
-   Responsive — Hide sidebar below 900px
+   Responsive — Hide sidebars below 900px
    -------------------------------------------------------------------------- */
 @media (max-width: 900px) {
     .sidebar {
         display: none;
+    }
+
+    .nav-sidebar {
+        position: fixed;
+        top: 3rem;
+        left: 0;
+        bottom: 2rem;
+        z-index: 90;
+        width: 260px;
+        box-shadow: var(--shadow-lg);
+    }
+
+    .nav-sidebar.collapsed {
+        width: 0;
+        box-shadow: none;
     }
 
     .document {
@@ -880,10 +1139,6 @@ img {
 
     .top-bar {
         padding: 0.5em 1em;
-    }
-
-    .file-path {
-        max-width: 40vw;
     }
 
     .flag-toolbar {
@@ -921,6 +1176,50 @@ img {
         padding: 0.8em 1em;
         font-size: 0.8rem;
     }
+}
+
+/* --------------------------------------------------------------------------
+   JSON Viewer
+   -------------------------------------------------------------------------- */
+.json-viewer {
+    background-color: var(--code-bg);
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    padding: 1.4em;
+    overflow-x: auto;
+    line-height: 1.6;
+    font-size: 0.88rem;
+}
+
+.json-viewer code {
+    background: none;
+    padding: 0;
+}
+
+.json-key {
+    color: var(--accent);
+    font-weight: 600;
+}
+
+.json-string {
+    color: var(--link);
+}
+
+.json-number {
+    color: #8B5CF6;
+}
+
+[data-theme="dark"] .json-number {
+    color: #BC8CFF;
+}
+
+.json-keyword {
+    color: #D97706;
+    font-weight: 600;
+}
+
+[data-theme="dark"] .json-keyword {
+    color: #F59E0B;
 }
 
 /* --------------------------------------------------------------------------
