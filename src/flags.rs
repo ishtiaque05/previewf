@@ -141,6 +141,44 @@ pub fn remove_flag(content: &str, id: u32) -> Result<String, PreviewError> {
     Ok(output)
 }
 
+/// Update the comment of an existing flag by ID.
+/// The new comment is sanitized before insertion.
+pub fn update_flag_comment(
+    content: &str,
+    id: u32,
+    new_comment: &str,
+) -> Result<String, PreviewError> {
+    let target = Regex::new(&format!(r"<flag:{id}>Comment:\s*.+?</flag>")).unwrap();
+    let sanitized = sanitize_comment(new_comment);
+    let replacement = format!("<flag:{id}>Comment: {sanitized}</flag>");
+    let mut found = false;
+
+    let result: Vec<String> = content
+        .lines()
+        .map(|line| {
+            if target.is_match(line) {
+                found = true;
+                target.replace_all(line, replacement.as_str()).to_string()
+            } else {
+                line.to_string()
+            }
+        })
+        .collect();
+
+    if !found {
+        return Err(PreviewError::FlagParse {
+            line: 0,
+            detail: format!("Flag with ID {} not found", id),
+        });
+    }
+
+    let mut output = result.join("\n");
+    if content.ends_with('\n') {
+        output.push('\n');
+    }
+    Ok(output)
+}
+
 /// Format flags as human-readable text output.
 pub fn format_flags_text(report: &FlagReport) -> String {
     let mut output = format!("Flags in {}:\n\n", report.file);

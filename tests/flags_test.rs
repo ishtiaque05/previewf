@@ -1,5 +1,6 @@
 use previewf::flags::{
-    extract_flags, format_flags_text, inject_flag, remove_flag, Flag, FlagReport,
+    extract_flags, format_flags_text, inject_flag, remove_flag, update_flag_comment, Flag,
+    FlagReport,
 };
 
 // --- extract_flags ---
@@ -307,4 +308,44 @@ fn test_remove_flag_no_trailing_newline() {
     let content = "Line <flag:1>Comment: test</flag> here.";
     let result = remove_flag(content, 1).unwrap();
     assert!(!result.ends_with('\n'));
+}
+
+// --- update_flag_comment ---
+
+#[test]
+fn test_update_flag_comment_changes_comment() {
+    let content = "Line <flag:1>Comment: old comment</flag> here.\n";
+    let result = update_flag_comment(content, 1, "new comment").unwrap();
+    assert!(result.contains("<flag:1>Comment: new comment</flag>"));
+    assert!(!result.contains("old comment"));
+}
+
+#[test]
+fn test_update_flag_comment_sanitizes_input() {
+    let content = "Line <flag:1>Comment: safe</flag> here.\n";
+    let result = update_flag_comment(content, 1, "<script>alert(1)</script>").unwrap();
+    assert!(result.contains("&lt;script&gt;"));
+    assert!(!result.contains("<script>"));
+}
+
+#[test]
+fn test_update_flag_comment_preserves_other_flags() {
+    let content = "A <flag:1>Comment: first</flag> B <flag:2>Comment: second</flag>\n";
+    let result = update_flag_comment(content, 1, "updated").unwrap();
+    assert!(result.contains("<flag:1>Comment: updated</flag>"));
+    assert!(result.contains("<flag:2>Comment: second</flag>"));
+}
+
+#[test]
+fn test_update_flag_comment_not_found_returns_error() {
+    let content = "No flags.\n";
+    let result = update_flag_comment(content, 99, "anything");
+    assert!(result.is_err());
+}
+
+#[test]
+fn test_update_flag_comment_preserves_trailing_newline() {
+    let content = "Line <flag:1>Comment: old</flag> here.\n";
+    let result = update_flag_comment(content, 1, "new").unwrap();
+    assert!(result.ends_with('\n'));
 }
