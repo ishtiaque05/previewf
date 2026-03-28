@@ -23,6 +23,10 @@ static THEME_SET: LazyLock<ThemeSet> = LazyLock::new(ThemeSet::load_defaults);
 
 /// Render markdown content to HTML with syntax highlighting and flag support.
 pub fn render_html(content: &str) -> String {
+    // Convert flag tags to HTML spans BEFORE comrak processes the markdown.
+    // With unsafe_=true, comrak passes raw HTML through untouched.
+    let content = render_flags(content);
+
     let mut options = comrak::Options::default();
     options.extension.strikethrough = true;
     options.extension.table = true;
@@ -31,11 +35,10 @@ pub fn render_html(content: &str) -> String {
     options.extension.footnotes = true;
     options.render.unsafe_ = true;
 
-    let html = comrak::markdown_to_html(content, &options);
+    let html = comrak::markdown_to_html(&content, &options);
 
     let html = highlight_code_blocks(&html);
-    let html = render_diff_blocks(&html);
-    render_flags(&html)
+    render_diff_blocks(&html)
 }
 
 fn highlight_code_blocks(html: &str) -> String {

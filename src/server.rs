@@ -14,7 +14,7 @@ use rust_embed::Embed;
 use serde::{Deserialize, Serialize};
 use tokio::sync::{broadcast, Mutex};
 
-use crate::flags::{extract_flags, inject_flag, FlagReport};
+use crate::flags::{extract_flags, inject_flag, remove_flag, update_flag_comment, FlagReport};
 use crate::html;
 use crate::markdown::render_html;
 use crate::PreviewError;
@@ -152,7 +152,12 @@ fn create_router_with_reload(config: ServerConfig, reload_tx: broadcast::Sender<
         .route("/view/{*filepath}", get(view_handler))
         .route("/raw/{*filepath}", get(raw_handler))
         .route("/flags/{*filepath}", get(flags_handler))
-        .route("/flag/{*filepath}", post(flag_handler))
+        .route(
+            "/flag/{*filepath}",
+            post(flag_handler)
+                .delete(delete_flag_handler)
+                .put(update_flag_handler),
+        )
         .route("/api/tree", get(tree_handler))
         .route("/ws", get(ws_handler))
         .route("/assets/{*filepath}", get(asset_handler))
@@ -697,6 +702,12 @@ struct FlagRequest {
     selected_text: String,
 }
 
+/// Request body for flag comment update.
+#[derive(Deserialize)]
+struct UpdateFlagRequest {
+    comment: String,
+}
+
 /// `POST /flag/{*filepath}` — inject a flag into a markdown file.
 async fn flag_handler(
     State(state): State<AppState>,
@@ -753,6 +764,108 @@ async fn flag_handler(
             Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
         },
         Err(e) => (StatusCode::BAD_REQUEST, e.to_string()).into_response(),
+    }
+}
+
+/// `DELETE /flag/{id}/{filepath…}` — remove a flag by ID.
+///
+/// The route shares `/flag/{*filepath}` with the POST handler; the first
+/// path segment is the numeric flag ID and the remainder is the file path.
+async fn delete_flag_handler(
+    State(state): State<AppState>,
+    AxumPath(raw_path): AxumPath<String>,
+) -> Response {
+    let (id, filepath) = match parse_id_and_filepath(&raw_path) {
+        Some(pair) => pair,
+        None => return (StatusCode::BAD_REQUEST, "Invalid flag path").into_response(),
+    };
+
+    if !is_markdown(&filepath) {
+        return (
+            StatusCode::BAD_REQUEST,
+            "Flags can only be removed from markdown files",
+        )
+            .into_response();
+    }
+
+    let full_path = match resolve_path(state.config.path(), &filepath) {
+        Some(p) => p,
+        None => return not_found_response(&filepath),
+    };
+
+    let file_lock = {
+        let mut locks = state.file_locks.lock().await;
+        locks
+            .entry(full_path.clone())
+            .or_insert_with(|| Arc::new(Mutex::new(())))
+            .clone()
+    };
+    let _guard = file_lock.lock().await;
+
+    let content = match std::fs::read_to_string(&full_path) {
+        Ok(c) => c,
+        Err(_) => return not_found_response(&filepath),
+    };
+
+    match remove_flag(&content, id) {
+        Ok(new_content) => match std::fs::write(&full_path, &new_content) {
+            Ok(_) => (StatusCode::OK, "Flag removed").into_response(),
+            Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        },
+        Err(e) => (StatusCode::NOT_FOUND, e.to_string()).into_response(),
+    }
+}
+
+/// `PUT /flag/{id}/{filepath…}` — update a flag's comment.
+///
+/// Same path-parsing strategy as [`delete_flag_handler`].
+async fn update_flag_handler(
+    State(state): State<AppState>,
+    AxumPath(raw_path): AxumPath<String>,
+    axum::Json(body): axum::Json<UpdateFlagRequest>,
+) -> Response {
+    let (id, filepath) = match parse_id_and_filepath(&raw_path) {
+        Some(pair) => pair,
+        None => return (StatusCode::BAD_REQUEST, "Invalid flag path").into_response(),
+    };
+
+    if !is_markdown(&filepath) {
+        return (
+            StatusCode::BAD_REQUEST,
+            "Flags can only be edited in markdown files",
+        )
+            .into_response();
+    }
+
+    if body.comment.trim().is_empty() {
+        return (StatusCode::BAD_REQUEST, "Comment cannot be empty").into_response();
+    }
+
+    let full_path = match resolve_path(state.config.path(), &filepath) {
+        Some(p) => p,
+        None => return not_found_response(&filepath),
+    };
+
+    let file_lock = {
+        let mut locks = state.file_locks.lock().await;
+        locks
+            .entry(full_path.clone())
+            .or_insert_with(|| Arc::new(Mutex::new(())))
+            .clone()
+    };
+    let _guard = file_lock.lock().await;
+
+    let content = match std::fs::read_to_string(&full_path) {
+        Ok(c) => c,
+        Err(_) => return not_found_response(&filepath),
+    };
+
+    match update_flag_comment(&content, id, &body.comment) {
+        Ok(new_content) => match std::fs::write(&full_path, &new_content) {
+            Ok(_) => (StatusCode::OK, "Flag updated").into_response(),
+            Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        },
+        Err(e) => (StatusCode::NOT_FOUND, e.to_string()).into_response(),
     }
 }
 
@@ -910,6 +1023,18 @@ fn build_tree_inner(dir: &Path, base: &Path, depth: usize) -> Vec<TreeNode> {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/// Parse a raw catch-all path of the form `"{id}/{filepath}"` into its
+/// numeric flag ID and the remaining file path.  Returns `None` when the
+/// first segment is not a valid `u32` or there is no file path after it.
+fn parse_id_and_filepath(raw: &str) -> Option<(u32, String)> {
+    let (id_str, rest) = raw.split_once('/')?;
+    let id: u32 = id_str.parse().ok()?;
+    if rest.is_empty() {
+        return None;
+    }
+    Some((id, rest.to_string()))
+}
 
 /// Resolve a relative filepath against the configured base path.
 ///
