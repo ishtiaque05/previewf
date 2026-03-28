@@ -11,6 +11,14 @@
        1. Theme Toggle
        ---------------------------------------------------------------------- */
 
+    // Suppress WebSocket reload briefly after local flag mutations to avoid
+    // a redundant full-page reload triggered by the file watcher.
+    var suppressReload = false;
+    function suppressReloadBriefly() {
+        suppressReload = true;
+        setTimeout(function () { suppressReload = false; }, 500);
+    }
+
     var THEME_KEY = 'previewf-theme';
 
     function getPreferredTheme() {
@@ -313,7 +321,7 @@
                 }
             })
             .catch(function (err) {
-                console.warn('Failed to refresh flag sidebar:', err);
+                showStatusMessage('Failed to refresh flags. Reload the page.', true);
             });
     }
 
@@ -374,10 +382,11 @@
             fetch(url, { method: 'DELETE' })
                 .then(function (r) {
                     if (!r.ok) throw new Error('Delete failed: ' + r.status);
+                    suppressReloadBriefly();
                     refreshFlagSidebar();
                 })
                 .catch(function (err) {
-                    console.warn('Failed to delete flag:', err);
+                    showStatusMessage('Failed to delete flag: ' + err.message, true);
                 });
         });
 
@@ -447,11 +456,11 @@
             })
             .then(function (r) {
                 if (!r.ok) throw new Error('Update failed: ' + r.status);
+                suppressReloadBriefly();
                 refreshFlagSidebar();
             })
             .catch(function (err) {
-                console.warn('Failed to update flag:', err);
-                exitEditMode();
+                showStatusMessage('Failed to save: ' + err.message, true);
             });
         }
 
@@ -627,6 +636,7 @@
         })
         .then(function (response) {
             if (response.ok) {
+                suppressReloadBriefly();
                 refreshFlagSidebar();
             } else {
                 response.text().then(function (text) {
@@ -726,7 +736,7 @@
 
             ws.onmessage = function (event) {
                 var data = typeof event.data === 'string' ? event.data.trim() : '';
-                if (data === 'reload') {
+                if (data === 'reload' && !suppressReload) {
                     window.location.reload();
                 }
             };
