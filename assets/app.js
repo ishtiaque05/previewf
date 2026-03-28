@@ -84,13 +84,16 @@
         // Fetch and render tree
         if (treeEl) {
             fetch('/api/tree')
-                .then(function (r) { return r.json(); })
+                .then(function (r) {
+                    if (!r.ok) throw new Error('Tree API returned ' + r.status);
+                    return r.json();
+                })
                 .then(function (tree) {
                     renderTree(treeEl, tree, 0);
                     highlightCurrentFile();
                 })
-                .catch(function () {
-                    // silently fail — tree is nice to have
+                .catch(function (err) {
+                    console.warn('Failed to load file tree:', err);
                 });
         }
     }
@@ -167,15 +170,20 @@
         });
     }
 
+    function encodeFilePath(p) {
+        return p.split('/').map(encodeURIComponent).join('/');
+    }
+
     function renderFileNode(container, node, depth) {
         var link = document.createElement('a');
         link.className = 'tree-item tree-depth-' + Math.min(depth, 5);
 
         // Determine href based on type
+        var encodedPath = encodeFilePath(node.path);
         if (node.type === 'md' || node.type === 'json') {
-            link.href = '/view/' + node.path;
+            link.href = '/view/' + encodedPath;
         } else if (node.type === 'html') {
-            link.href = '/raw/' + node.path;
+            link.href = '/raw/' + encodedPath;
         }
 
         var icon = document.createElement('span');

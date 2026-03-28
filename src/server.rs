@@ -367,31 +367,30 @@ fn listing_response(state: &AppState, subpath: &str) -> Response {
     Html(page_html).into_response()
 }
 
-/// Build breadcrumb HTML from a subpath like "github/thinkific-thinkific".
-fn build_breadcrumbs(subpath: &str) -> String {
+/// Build breadcrumb HTML for any path (directory or file).
+/// The last segment is rendered as non-linked "current" text;
+/// intermediate segments link to `/browse/`.
+fn build_breadcrumbs(path: &str) -> String {
     let mut parts = Vec::new();
     parts.push(r#"<a class="breadcrumb-link" href="/">root</a>"#.to_string());
 
-    if !subpath.is_empty() {
-        let segments: Vec<&str> = subpath.split('/').filter(|s| !s.is_empty()).collect();
-        let mut accumulated = String::new();
-        for (i, seg) in segments.iter().enumerate() {
-            if !accumulated.is_empty() {
-                accumulated.push('/');
-            }
-            accumulated.push_str(seg);
-            let safe_seg = html::escape(seg);
+    let segments: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
+    let mut accumulated = String::new();
+    for (i, seg) in segments.iter().enumerate() {
+        if !accumulated.is_empty() {
+            accumulated.push('/');
+        }
+        accumulated.push_str(seg);
+        let safe_seg = html::escape(seg);
+        if i == segments.len() - 1 {
+            parts.push(format!(
+                r#"<span class="breadcrumb-current">{safe_seg}</span>"#
+            ));
+        } else {
             let safe_path = html::escape(&accumulated);
-            if i == segments.len() - 1 {
-                // Current directory — not a link
-                parts.push(format!(
-                    r#"<span class="breadcrumb-current">{safe_seg}</span>"#
-                ));
-            } else {
-                parts.push(format!(
-                    r#"<a class="breadcrumb-link" href="/browse/{safe_path}">{safe_seg}</a>"#
-                ));
-            }
+            parts.push(format!(
+                r#"<a class="breadcrumb-link" href="/browse/{safe_path}">{safe_seg}</a>"#
+            ));
         }
     }
 
@@ -425,8 +424,7 @@ async fn view_handler(
     };
 
     // Build breadcrumb for the file path
-    let parent_path = filepath.rsplit_once('/').map(|(p, _)| p).unwrap_or("");
-    let breadcrumb_html = build_file_breadcrumbs(&filepath, parent_path);
+    let breadcrumb_html = build_breadcrumbs(&filepath);
 
     // Load the document template
     let template = Assets::get("document.html")
@@ -437,45 +435,10 @@ async fn view_handler(
 
     let page_html = template
         .replace("{{title}}", &html::escape(&title))
-        .replace("{{filepath}}", &html::escape(&filepath))
         .replace("{{breadcrumbs}}", &breadcrumb_html)
         .replace("{{content}}", &rendered);
 
     Html(page_html).into_response()
-}
-
-/// Build breadcrumb HTML for a file view, linking back to parent directories.
-fn build_file_breadcrumbs(filepath: &str, _parent: &str) -> String {
-    let segments: Vec<&str> = filepath.split('/').filter(|s| !s.is_empty()).collect();
-    let mut parts = Vec::new();
-    parts.push(r#"<a class="breadcrumb-link" href="/">root</a>"#.to_string());
-
-    let mut accumulated = String::new();
-    for (i, seg) in segments.iter().enumerate() {
-        if !accumulated.is_empty() {
-            accumulated.push('/');
-        }
-        accumulated.push_str(seg);
-        let safe_seg = html::escape(seg);
-
-        if i == segments.len() - 1 {
-            // Current file — not a link
-            parts.push(format!(
-                r#"<span class="breadcrumb-current">{safe_seg}</span>"#
-            ));
-        } else {
-            // Intermediate directory — link to browse
-            let safe_path = html::escape(&accumulated);
-            parts.push(format!(
-                r#"<a class="breadcrumb-link" href="/browse/{safe_path}">{safe_seg}</a>"#
-            ));
-        }
-    }
-
-    format!(
-        r#"<nav class="breadcrumbs">{}</nav>"#,
-        parts.join(r#"<span class="breadcrumb-sep">/</span>"#)
-    )
 }
 
 /// Render a JSON string as pretty-printed HTML with syntax highlighting.
@@ -536,6 +499,8 @@ enum JsonToken {
 struct JsonTokenizer<'a> {
     chars: std::iter::Peekable<std::str::Chars<'a>>,
     expect_key: bool,
+    /// Stack tracking nesting context: `true` = object, `false` = array.
+    context_stack: Vec<bool>,
 }
 
 impl<'a> JsonTokenizer<'a> {
@@ -543,6 +508,7 @@ impl<'a> JsonTokenizer<'a> {
         Self {
             chars: s.chars().peekable(),
             expect_key: false,
+            context_stack: Vec::new(),
         }
     }
 }
@@ -570,31 +536,36 @@ impl Iterator for JsonTokenizer<'_> {
         match c {
             '{' => {
                 self.chars.next();
+                self.context_stack.push(true); // entering object
                 self.expect_key = true;
                 Some(JsonToken::Punct("{".into()))
             }
             '}' => {
                 self.chars.next();
+                self.context_stack.pop();
                 self.expect_key = false;
                 Some(JsonToken::Punct("}".into()))
             }
             '[' => {
                 self.chars.next();
+                self.context_stack.push(false); // entering array
                 self.expect_key = false;
                 Some(JsonToken::Punct("[".into()))
             }
             ']' => {
                 self.chars.next();
+                self.context_stack.pop();
                 Some(JsonToken::Punct("]".into()))
             }
             ':' => {
                 self.chars.next();
                 self.expect_key = false;
-                Some(JsonToken::Punct(": ".into()))
+                Some(JsonToken::Punct(":".into()))
             }
             ',' => {
                 self.chars.next();
-                self.expect_key = true;
+                let in_object = self.context_stack.last().copied().unwrap_or(false);
+                self.expect_key = in_object;
                 Some(JsonToken::Punct(",".into()))
             }
             '"' => {
@@ -867,32 +838,46 @@ async fn tree_handler(State(state): State<AppState>) -> Response {
     }
 }
 
+const MAX_TREE_DEPTH: usize = 10;
+
 /// Recursively build a tree of directories and viewable files.
 fn build_tree(dir: &Path, base: &Path) -> Vec<TreeNode> {
-    let mut dirs: Vec<TreeNode> = Vec::new();
-    let mut files: Vec<TreeNode> = Vec::new();
+    build_tree_inner(dir, base, 0)
+}
+
+fn build_tree_inner(dir: &Path, base: &Path, depth: usize) -> Vec<TreeNode> {
+    if depth >= MAX_TREE_DEPTH {
+        return Vec::new();
+    }
 
     let Ok(read_dir) = std::fs::read_dir(dir) else {
         return Vec::new();
     };
 
+    let mut dir_nodes: Vec<TreeNode> = Vec::new();
+    let mut file_nodes: Vec<TreeNode> = Vec::new();
+
     for entry in read_dir.flatten() {
         let name = entry.file_name().to_string_lossy().to_string();
+
+        // Skip hidden files/directories (e.g. .git, .cache)
+        if name.starts_with('.') {
+            continue;
+        }
+
         let Ok(ft) = entry.file_type() else {
             continue;
         };
 
-        // Compute relative path from base
-        let rel_path = entry
-            .path()
-            .strip_prefix(base)
-            .unwrap_or(entry.path().as_path())
-            .to_string_lossy()
-            .to_string();
+        // Compute relative path from base; skip if strip_prefix fails
+        let rel_path = match entry.path().strip_prefix(base) {
+            Ok(p) => p.to_string_lossy().to_string(),
+            Err(_) => continue,
+        };
 
         if ft.is_dir() {
-            let children = build_tree(&entry.path(), base);
-            dirs.push(TreeNode {
+            let children = build_tree_inner(&entry.path(), base, depth + 1);
+            dir_nodes.push(TreeNode {
                 name,
                 node_type: "dir",
                 path: Some(rel_path),
@@ -900,14 +885,14 @@ fn build_tree(dir: &Path, base: &Path) -> Vec<TreeNode> {
             });
         } else if is_markdown(&name) || is_json(&name) {
             let node_type = if is_markdown(&name) { "md" } else { "json" };
-            files.push(TreeNode {
+            file_nodes.push(TreeNode {
                 name,
                 node_type,
                 path: Some(rel_path),
                 children: None,
             });
         } else if name.ends_with(".html") || name.ends_with(".htm") {
-            files.push(TreeNode {
+            file_nodes.push(TreeNode {
                 name,
                 node_type: "html",
                 path: Some(rel_path),
@@ -916,10 +901,10 @@ fn build_tree(dir: &Path, base: &Path) -> Vec<TreeNode> {
         }
     }
 
-    dirs.sort_by_key(|a| a.name.to_lowercase());
-    files.sort_by_key(|a| a.name.to_lowercase());
-    dirs.extend(files);
-    dirs
+    dir_nodes.sort_by_key(|a| a.name.to_lowercase());
+    file_nodes.sort_by_key(|a| a.name.to_lowercase());
+    dir_nodes.extend(file_nodes);
+    dir_nodes
 }
 
 // ---------------------------------------------------------------------------
