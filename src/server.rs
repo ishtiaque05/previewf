@@ -11,7 +11,7 @@ use axum::response::{Html, IntoResponse, Redirect, Response};
 use axum::routing::{get, post};
 use axum::Router;
 use rust_embed::Embed;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use tokio::sync::{broadcast, Mutex};
 
 use crate::flags::{extract_flags, inject_flag, FlagReport};
@@ -64,7 +64,7 @@ impl ServerBuilder {
     pub fn new() -> Self {
         Self {
             path: PathBuf::from("."),
-            port: 3000,
+            port: 4567,
             live_reload: true,
         }
     }
@@ -148,10 +148,12 @@ fn create_router_with_reload(config: ServerConfig, reload_tx: broadcast::Sender<
 
     Router::new()
         .route("/", get(index_handler))
+        .route("/browse/{*dirpath}", get(browse_handler))
         .route("/view/{*filepath}", get(view_handler))
         .route("/raw/{*filepath}", get(raw_handler))
         .route("/flags/{*filepath}", get(flags_handler))
         .route("/flag/{*filepath}", post(flag_handler))
+        .route("/api/tree", get(tree_handler))
         .route("/ws", get(ws_handler))
         .route("/assets/{*filepath}", get(asset_handler))
         .with_state(state)
@@ -211,10 +213,23 @@ pub async fn run(config: ServerConfig) -> Result<(), PreviewError> {
 
 /// `GET /` — directory listing, or redirect to single file.
 async fn index_handler(State(state): State<AppState>) -> Response {
+    listing_response(&state, "")
+}
+
+/// `GET /browse/{*dirpath}` — browse into a subdirectory.
+async fn browse_handler(
+    State(state): State<AppState>,
+    AxumPath(dirpath): AxumPath<String>,
+) -> Response {
+    listing_response(&state, &dirpath)
+}
+
+/// Shared listing logic for both `/` and `/browse/{dirpath}`.
+fn listing_response(state: &AppState, subpath: &str) -> Response {
     let base = state.config.path();
 
-    // If the path is a single file, redirect to the appropriate viewer.
-    if base.is_file() {
+    // If the configured path is a single file, redirect to the viewer.
+    if base.is_file() && subpath.is_empty() {
         let name = base.file_name().unwrap_or_default().to_string_lossy();
         return if is_markdown(&name) {
             Redirect::temporary(&format!("/view/{}", name)).into_response()
@@ -223,29 +238,73 @@ async fn index_handler(State(state): State<AppState>) -> Response {
         };
     }
 
-    // Collect eligible files (.md and .html) with flag counts for markdown
+    // Resolve the subdirectory, preventing path traversal.
+    let dir = if subpath.is_empty() {
+        base.to_path_buf()
+    } else {
+        match resolve_path(base, subpath) {
+            Some(p) if p.is_dir() => p,
+            _ => return not_found_response(subpath),
+        }
+    };
+
+    // Build breadcrumbs
+    let breadcrumb_html = build_breadcrumbs(subpath);
+
+    // Collect directories, markdown, json, and html files
+    let mut dirs: Vec<String> = Vec::new();
     let mut md_files: Vec<(String, usize)> = Vec::new();
+    let mut json_files: Vec<String> = Vec::new();
     let mut html_files: Vec<String> = Vec::new();
-    if let Ok(read_dir) = std::fs::read_dir(base) {
+
+    if let Ok(read_dir) = std::fs::read_dir(&dir) {
         for entry in read_dir.flatten() {
             let name = entry.file_name().to_string_lossy().to_string();
-            if is_markdown(&name) {
-                let content = std::fs::read_to_string(entry.path()).unwrap_or_default();
-                let flag_count = extract_flags(&content).len();
-                md_files.push((name, flag_count));
-            } else if name.ends_with(".html") || name.ends_with(".htm") {
-                html_files.push(name);
+            let file_type = entry.file_type();
+
+            if let Ok(ft) = file_type {
+                if ft.is_dir() {
+                    dirs.push(name);
+                } else if is_markdown(&name) {
+                    let content = std::fs::read_to_string(entry.path()).unwrap_or_default();
+                    let flag_count = extract_flags(&content).len();
+                    md_files.push((name, flag_count));
+                } else if is_json(&name) {
+                    json_files.push(name);
+                } else if name.ends_with(".html") || name.ends_with(".htm") {
+                    html_files.push(name);
+                }
             }
         }
     }
+
+    dirs.sort_by(|a, b| a.to_lowercase().cmp(&b.to_lowercase()));
     md_files.sort_by(|a, b| a.0.to_lowercase().cmp(&b.0.to_lowercase()));
+    json_files.sort_by(|a, b| a.to_lowercase().cmp(&b.to_lowercase()));
     html_files.sort_unstable();
 
-    // Build HTML entries
+    // Build path prefix for links
+    let prefix = if subpath.is_empty() {
+        String::new()
+    } else {
+        format!("{}/", subpath.trim_end_matches('/'))
+    };
+
     let mut file_entries_parts: Vec<String> = Vec::new();
 
+    // Directory entries
+    for name in &dirs {
+        let safe_name = html::escape(name);
+        let browse_path = html::escape(&format!("{}{}", prefix, name));
+        file_entries_parts.push(format!(
+            r#"<a class="file-entry file-entry-dir" href="/browse/{browse_path}"><span class="file-entry-name-group"><span class="file-entry-icon dir-icon">&#128193;</span><span class="file-entry-name">{safe_name}/</span></span><span class="file-entry-badge dir-badge">folder</span></a>"#,
+        ));
+    }
+
+    // Markdown entries
     for (name, flag_count) in &md_files {
         let safe_name = html::escape(name);
+        let view_path = html::escape(&format!("{}{}", prefix, name));
         let badge = if *flag_count > 0 {
             format!(
                 r#"<span class="file-entry-badge has-flags">{} flag{}</span>"#,
@@ -256,39 +315,93 @@ async fn index_handler(State(state): State<AppState>) -> Response {
             r#"<span class="file-entry-badge">&mdash;</span>"#.to_string()
         };
         file_entries_parts.push(format!(
-            r#"<a class="file-entry" href="/view/{safe_name}"><span><span class="file-entry-icon">&#9670;</span><span class="file-entry-name">{safe_name}</span></span>{badge}</a>"#,
+            r#"<a class="file-entry" href="/view/{view_path}"><span class="file-entry-name-group"><span class="file-entry-icon md-icon">&#9670;</span><span class="file-entry-name">{safe_name}</span></span>{badge}</a>"#,
         ));
     }
 
+    // JSON entries
+    for name in &json_files {
+        let safe_name = html::escape(name);
+        let view_path = html::escape(&format!("{}{}", prefix, name));
+        file_entries_parts.push(format!(
+            r#"<a class="file-entry" href="/view/{view_path}"><span class="file-entry-name-group"><span class="file-entry-icon json-icon">&#123;&#125;</span><span class="file-entry-name">{safe_name}</span></span><span class="file-entry-badge json-badge">json</span></a>"#,
+        ));
+    }
+
+    // HTML entries
     for name in &html_files {
         let safe_name = html::escape(name);
+        let view_path = html::escape(&format!("{}{}", prefix, name));
         file_entries_parts.push(format!(
-            r#"<a class="file-entry" href="/raw/{safe_name}"><span><span class="file-entry-icon">&#9671;</span><span class="file-entry-name">{safe_name}</span></span><span class="file-entry-badge">(html)</span></a>"#,
+            r#"<a class="file-entry" href="/raw/{view_path}"><span class="file-entry-name-group"><span class="file-entry-icon html-icon">&#9671;</span><span class="file-entry-name">{safe_name}</span></span><span class="file-entry-badge html-badge">html</span></a>"#,
         ));
     }
 
     let file_entries = file_entries_parts.join("\n");
     let summary = format!(
-        "{} markdown &middot; {} html",
+        "{} folder{} &middot; {} markdown &middot; {} json &middot; {} html",
+        dirs.len(),
+        if dirs.len() == 1 { "" } else { "s" },
         md_files.len(),
-        html_files.len()
+        json_files.len(),
+        html_files.len(),
     );
-    let dir_display = base.display().to_string();
+
+    let dir_display = if subpath.is_empty() {
+        base.display().to_string()
+    } else {
+        format!("{}/{}", base.display(), subpath)
+    };
 
     // Load the index template from embedded assets
     let template = Assets::get("index.html")
         .map(|f| String::from_utf8_lossy(&f.data).into_owned())
         .unwrap_or_else(|| "<html><body>Template missing</body></html>".to_string());
 
-    let html = template
+    let page_html = template
         .replace("{{directory}}", &html::escape(&dir_display))
+        .replace("{{breadcrumbs}}", &breadcrumb_html)
         .replace("{{file_entries}}", &file_entries)
         .replace("{{summary}}", &summary);
 
-    Html(html).into_response()
+    Html(page_html).into_response()
 }
 
-/// `GET /view/{*filepath}` — render a markdown file as HTML.
+/// Build breadcrumb HTML from a subpath like "github/thinkific-thinkific".
+fn build_breadcrumbs(subpath: &str) -> String {
+    let mut parts = Vec::new();
+    parts.push(r#"<a class="breadcrumb-link" href="/">root</a>"#.to_string());
+
+    if !subpath.is_empty() {
+        let segments: Vec<&str> = subpath.split('/').filter(|s| !s.is_empty()).collect();
+        let mut accumulated = String::new();
+        for (i, seg) in segments.iter().enumerate() {
+            if !accumulated.is_empty() {
+                accumulated.push('/');
+            }
+            accumulated.push_str(seg);
+            let safe_seg = html::escape(seg);
+            let safe_path = html::escape(&accumulated);
+            if i == segments.len() - 1 {
+                // Current directory — not a link
+                parts.push(format!(
+                    r#"<span class="breadcrumb-current">{safe_seg}</span>"#
+                ));
+            } else {
+                parts.push(format!(
+                    r#"<a class="breadcrumb-link" href="/browse/{safe_path}">{safe_seg}</a>"#
+                ));
+            }
+        }
+    }
+
+    format!(
+        r#"<nav class="breadcrumbs">{}</nav>"#,
+        parts.join(r#"<span class="breadcrumb-sep">/</span>"#)
+    )
+}
+
+/// `GET /view/{*filepath}` — render a markdown or JSON file as HTML.
 async fn view_handler(
     State(state): State<AppState>,
     AxumPath(filepath): AxumPath<String>,
@@ -303,11 +416,17 @@ async fn view_handler(
         Err(_) => return not_found_response(&filepath),
     };
 
-    if !is_markdown(&filepath) {
-        return (StatusCode::BAD_REQUEST, "Not a markdown file").into_response();
-    }
+    let rendered = if is_markdown(&filepath) {
+        render_html(&content)
+    } else if is_json(&filepath) {
+        render_json_html(&content)
+    } else {
+        return (StatusCode::BAD_REQUEST, "Unsupported file type").into_response();
+    };
 
-    let rendered = render_html(&content);
+    // Build breadcrumb for the file path
+    let parent_path = filepath.rsplit_once('/').map(|(p, _)| p).unwrap_or("");
+    let breadcrumb_html = build_file_breadcrumbs(&filepath, parent_path);
 
     // Load the document template
     let template = Assets::get("document.html")
@@ -316,12 +435,240 @@ async fn view_handler(
 
     let title = filepath.rsplit('/').next().unwrap_or(&filepath).to_string();
 
-    let html = template
+    let page_html = template
         .replace("{{title}}", &html::escape(&title))
         .replace("{{filepath}}", &html::escape(&filepath))
+        .replace("{{breadcrumbs}}", &breadcrumb_html)
         .replace("{{content}}", &rendered);
 
-    Html(html).into_response()
+    Html(page_html).into_response()
+}
+
+/// Build breadcrumb HTML for a file view, linking back to parent directories.
+fn build_file_breadcrumbs(filepath: &str, _parent: &str) -> String {
+    let segments: Vec<&str> = filepath.split('/').filter(|s| !s.is_empty()).collect();
+    let mut parts = Vec::new();
+    parts.push(r#"<a class="breadcrumb-link" href="/">root</a>"#.to_string());
+
+    let mut accumulated = String::new();
+    for (i, seg) in segments.iter().enumerate() {
+        if !accumulated.is_empty() {
+            accumulated.push('/');
+        }
+        accumulated.push_str(seg);
+        let safe_seg = html::escape(seg);
+
+        if i == segments.len() - 1 {
+            // Current file — not a link
+            parts.push(format!(
+                r#"<span class="breadcrumb-current">{safe_seg}</span>"#
+            ));
+        } else {
+            // Intermediate directory — link to browse
+            let safe_path = html::escape(&accumulated);
+            parts.push(format!(
+                r#"<a class="breadcrumb-link" href="/browse/{safe_path}">{safe_seg}</a>"#
+            ));
+        }
+    }
+
+    format!(
+        r#"<nav class="breadcrumbs">{}</nav>"#,
+        parts.join(r#"<span class="breadcrumb-sep">/</span>"#)
+    )
+}
+
+/// Render a JSON string as pretty-printed HTML with syntax highlighting.
+fn render_json_html(content: &str) -> String {
+    // Try to pretty-print the JSON; fall back to raw content.
+    let pretty = match serde_json::from_str::<serde_json::Value>(content) {
+        Ok(val) => serde_json::to_string_pretty(&val).unwrap_or_else(|_| content.to_string()),
+        Err(_) => content.to_string(),
+    };
+
+    // Colorize JSON tokens
+    let mut out = String::from(r#"<pre class="json-viewer"><code>"#);
+    for ch in JsonTokenizer::new(&pretty) {
+        match ch {
+            JsonToken::Key(s) => {
+                out.push_str(&format!(
+                    r#"<span class="json-key">{}</span>"#,
+                    html::escape(&s)
+                ));
+            }
+            JsonToken::StringVal(s) => {
+                out.push_str(&format!(
+                    r#"<span class="json-string">{}</span>"#,
+                    html::escape(&s)
+                ));
+            }
+            JsonToken::Number(s) => {
+                out.push_str(&format!(
+                    r#"<span class="json-number">{}</span>"#,
+                    html::escape(&s)
+                ));
+            }
+            JsonToken::Bool(s) | JsonToken::Null(s) => {
+                out.push_str(&format!(
+                    r#"<span class="json-keyword">{}</span>"#,
+                    html::escape(&s)
+                ));
+            }
+            JsonToken::Punct(s) => {
+                out.push_str(&html::escape(&s));
+            }
+        }
+    }
+    out.push_str("</code></pre>");
+    out
+}
+
+/// Simple JSON tokenizer for syntax highlighting.
+enum JsonToken {
+    Key(String),
+    StringVal(String),
+    Number(String),
+    Bool(String),
+    Null(String),
+    Punct(String),
+}
+
+struct JsonTokenizer<'a> {
+    chars: std::iter::Peekable<std::str::Chars<'a>>,
+    expect_key: bool,
+}
+
+impl<'a> JsonTokenizer<'a> {
+    fn new(s: &'a str) -> Self {
+        Self {
+            chars: s.chars().peekable(),
+            expect_key: false,
+        }
+    }
+}
+
+impl Iterator for JsonTokenizer<'_> {
+    type Item = JsonToken;
+
+    fn next(&mut self) -> Option<JsonToken> {
+        // Skip whitespace but emit it as punctuation for formatting
+        let mut ws = String::new();
+        while let Some(&c) = self.chars.peek() {
+            if c.is_whitespace() {
+                ws.push(c);
+                self.chars.next();
+            } else {
+                break;
+            }
+        }
+        if !ws.is_empty() {
+            return Some(JsonToken::Punct(ws));
+        }
+
+        let &c = self.chars.peek()?;
+
+        match c {
+            '{' => {
+                self.chars.next();
+                self.expect_key = true;
+                Some(JsonToken::Punct("{".into()))
+            }
+            '}' => {
+                self.chars.next();
+                self.expect_key = false;
+                Some(JsonToken::Punct("}".into()))
+            }
+            '[' => {
+                self.chars.next();
+                self.expect_key = false;
+                Some(JsonToken::Punct("[".into()))
+            }
+            ']' => {
+                self.chars.next();
+                Some(JsonToken::Punct("]".into()))
+            }
+            ':' => {
+                self.chars.next();
+                self.expect_key = false;
+                Some(JsonToken::Punct(": ".into()))
+            }
+            ',' => {
+                self.chars.next();
+                self.expect_key = true;
+                Some(JsonToken::Punct(",".into()))
+            }
+            '"' => {
+                let s = self.read_string();
+                if self.expect_key {
+                    self.expect_key = false;
+                    Some(JsonToken::Key(s))
+                } else {
+                    Some(JsonToken::StringVal(s))
+                }
+            }
+            't' | 'f' => {
+                let word = self.read_word();
+                Some(JsonToken::Bool(word))
+            }
+            'n' => {
+                let word = self.read_word();
+                Some(JsonToken::Null(word))
+            }
+            _ if c == '-' || c.is_ascii_digit() => {
+                let num = self.read_number();
+                Some(JsonToken::Number(num))
+            }
+            _ => {
+                self.chars.next();
+                Some(JsonToken::Punct(c.to_string()))
+            }
+        }
+    }
+}
+
+impl JsonTokenizer<'_> {
+    fn read_string(&mut self) -> String {
+        let mut s = String::new();
+        s.push(self.chars.next().unwrap()); // opening "
+        let mut escaped = false;
+        for c in self.chars.by_ref() {
+            s.push(c);
+            if escaped {
+                escaped = false;
+            } else if c == '\\' {
+                escaped = true;
+            } else if c == '"' {
+                break;
+            }
+        }
+        s
+    }
+
+    fn read_word(&mut self) -> String {
+        let mut s = String::new();
+        while let Some(&c) = self.chars.peek() {
+            if c.is_ascii_alphabetic() {
+                s.push(c);
+                self.chars.next();
+            } else {
+                break;
+            }
+        }
+        s
+    }
+
+    fn read_number(&mut self) -> String {
+        let mut s = String::new();
+        while let Some(&c) = self.chars.peek() {
+            if c.is_ascii_digit() || c == '.' || c == '-' || c == '+' || c == 'e' || c == 'E' {
+                s.push(c);
+                self.chars.next();
+            } else {
+                break;
+            }
+        }
+        s
+    }
 }
 
 /// `GET /raw/{*filepath}` — serve an HTML file as-is.
@@ -489,6 +836,93 @@ async fn asset_handler(AxumPath(filepath): AxumPath<String>) -> Response {
 }
 
 // ---------------------------------------------------------------------------
+// Tree API
+// ---------------------------------------------------------------------------
+
+/// A node in the directory tree.
+#[derive(Serialize)]
+struct TreeNode {
+    name: String,
+    #[serde(rename = "type")]
+    node_type: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    children: Option<Vec<TreeNode>>,
+}
+
+/// `GET /api/tree` — return the full directory tree as JSON.
+async fn tree_handler(State(state): State<AppState>) -> Response {
+    let base = state.config.path();
+    let tree = build_tree(base, base);
+
+    match serde_json::to_string(&tree) {
+        Ok(json) => (
+            StatusCode::OK,
+            [(header::CONTENT_TYPE, "application/json")],
+            json,
+        )
+            .into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+/// Recursively build a tree of directories and viewable files.
+fn build_tree(dir: &Path, base: &Path) -> Vec<TreeNode> {
+    let mut dirs: Vec<TreeNode> = Vec::new();
+    let mut files: Vec<TreeNode> = Vec::new();
+
+    let Ok(read_dir) = std::fs::read_dir(dir) else {
+        return Vec::new();
+    };
+
+    for entry in read_dir.flatten() {
+        let name = entry.file_name().to_string_lossy().to_string();
+        let Ok(ft) = entry.file_type() else {
+            continue;
+        };
+
+        // Compute relative path from base
+        let rel_path = entry
+            .path()
+            .strip_prefix(base)
+            .unwrap_or(entry.path().as_path())
+            .to_string_lossy()
+            .to_string();
+
+        if ft.is_dir() {
+            let children = build_tree(&entry.path(), base);
+            dirs.push(TreeNode {
+                name,
+                node_type: "dir",
+                path: Some(rel_path),
+                children: Some(children),
+            });
+        } else if is_markdown(&name) || is_json(&name) {
+            let node_type = if is_markdown(&name) { "md" } else { "json" };
+            files.push(TreeNode {
+                name,
+                node_type,
+                path: Some(rel_path),
+                children: None,
+            });
+        } else if name.ends_with(".html") || name.ends_with(".htm") {
+            files.push(TreeNode {
+                name,
+                node_type: "html",
+                path: Some(rel_path),
+                children: None,
+            });
+        }
+    }
+
+    dirs.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    files.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    dirs.extend(files);
+    dirs
+}
+
+// ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
@@ -515,6 +949,10 @@ fn resolve_path(base: &Path, filepath: &str) -> Option<PathBuf> {
 pub fn is_markdown(name: &str) -> bool {
     let lower = name.to_lowercase();
     lower.ends_with(".md") || lower.ends_with(".markdown") || lower.ends_with(".mkd")
+}
+
+pub fn is_json(name: &str) -> bool {
+    name.to_lowercase().ends_with(".json")
 }
 
 fn not_found_response(filepath: &str) -> Response {

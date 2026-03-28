@@ -26,7 +26,7 @@ enum Commands {
         path: PathBuf,
 
         /// Port to listen on
-        #[arg(short, long, default_value_t = 3000)]
+        #[arg(short, long, default_value_t = 4567)]
         port: u16,
     },
 
