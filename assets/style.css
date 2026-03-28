@@ -1082,6 +1082,77 @@ img {
 }
 
 /* --------------------------------------------------------------------------
+   Flag Item Actions
+   -------------------------------------------------------------------------- */
+.flag-item-actions {
+    display: flex;
+    gap: 0.5em;
+    margin-top: 0.4em;
+}
+
+.flag-action-btn {
+    font-family: 'DM Sans', system-ui, sans-serif;
+    font-size: 0.72rem;
+    font-weight: 600;
+    padding: 0.2em 0.5em;
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    background: var(--bg);
+    color: var(--text-muted);
+    cursor: pointer;
+    transition: background-color 200ms ease, border-color 200ms ease, color 200ms ease;
+}
+
+.flag-action-btn:hover {
+    background-color: var(--bg-surface);
+    border-color: var(--accent);
+    color: var(--accent);
+}
+
+.flag-action-btn-delete:hover {
+    border-color: #EF4444;
+    color: #EF4444;
+}
+
+[data-theme="dark"] .flag-action-btn-delete:hover {
+    border-color: #F87171;
+    color: #F87171;
+}
+
+.flag-action-btn-save:hover {
+    border-color: var(--accent);
+    color: var(--accent);
+}
+
+.flag-edit-container {
+    margin-top: 0.4em;
+}
+
+.flag-edit-input {
+    width: 100%;
+    padding: 0.35em 0.5em;
+    font-family: 'DM Sans', system-ui, sans-serif;
+    font-size: 0.82rem;
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    background: var(--bg);
+    color: var(--text);
+    box-sizing: border-box;
+    transition: border-color 200ms ease;
+}
+
+.flag-edit-input:focus {
+    outline: none;
+    border-color: var(--accent);
+}
+
+.flag-edit-actions {
+    display: flex;
+    gap: 0.5em;
+    margin-top: 0.3em;
+}
+
+/* --------------------------------------------------------------------------
    Error page styling
    -------------------------------------------------------------------------- */
 .error-page {
