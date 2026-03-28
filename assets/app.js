@@ -269,91 +269,219 @@
        3. Flag Sidebar Population
        ---------------------------------------------------------------------- */
 
-    function initFlagSidebar() {
+    function refreshFlagSidebar() {
+        if (!currentFilepath) return;
+
         var flagList = document.getElementById('flag-list');
         var flagCountEl = document.getElementById('flag-count');
         if (!flagList) return;
 
-        var flags = document.querySelectorAll('.flag[data-flag-id]');
+        var url = '/flags/' + currentFilepath.split('/').map(encodeURIComponent).join('/');
 
-        // Update flag count badge
-        if (flagCountEl) {
-            flagCountEl.textContent = String(flags.length);
-        }
+        fetch(url)
+            .then(function (r) {
+                if (!r.ok) throw new Error('Flags API returned ' + r.status);
+                return r.json();
+            })
+            .then(function (report) {
+                // Clear existing items using safe DOM methods
+                while (flagList.firstChild) {
+                    flagList.removeChild(flagList.firstChild);
+                }
 
-        if (flags.length === 0) {
-            var emptyMsg = document.createElement('p');
-            emptyMsg.className = 'flag-list-empty';
-            emptyMsg.textContent = 'No flags in this document.';
-            emptyMsg.style.fontSize = '0.82rem';
-            emptyMsg.style.color = 'var(--text-muted)';
-            emptyMsg.style.fontFamily = "'DM Sans', system-ui, sans-serif";
-            flagList.appendChild(emptyMsg);
-            return;
-        }
+                var flags = report.flags || [];
 
-        for (var i = 0; i < flags.length; i++) {
-            var flagEl = flags[i];
-            var flagId = flagEl.getAttribute('data-flag-id');
-            var flagCommentEl = flagEl.querySelector('.flag-comment');
-            var flagComment = flagCommentEl ? flagCommentEl.textContent : '';
+                // Update badge
+                if (flagCountEl) {
+                    flagCountEl.textContent = String(flags.length);
+                }
 
-            var item = createFlagItem(flagId, flagComment, flagEl);
-            flagList.appendChild(item);
-        }
+                if (flags.length === 0) {
+                    var emptyMsg = document.createElement('p');
+                    emptyMsg.className = 'flag-list-empty';
+                    emptyMsg.textContent = 'No flags in this document.';
+                    emptyMsg.style.fontSize = '0.82rem';
+                    emptyMsg.style.color = 'var(--text-muted)';
+                    emptyMsg.style.fontFamily = "'DM Sans', system-ui, sans-serif";
+                    flagList.appendChild(emptyMsg);
+                    return;
+                }
 
-        // Click flag in document -> highlight in sidebar
-        for (var j = 0; j < flags.length; j++) {
-            (function (flagElement) {
-                flagElement.addEventListener('click', function () {
-                    var id = flagElement.getAttribute('data-flag-id');
-                    var sidebarItem = document.querySelector('.flag-item[data-flag-id="' + id + '"]');
-                    if (sidebarItem) {
-                        sidebarItem.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                        sidebarItem.classList.add('flag-highlight');
-                        setTimeout(function () {
-                            sidebarItem.classList.remove('flag-highlight');
-                        }, 2000);
-                    }
-                });
-            })(flags[j]);
-        }
+                for (var i = 0; i < flags.length; i++) {
+                    var item = createFlagItemFromData(flags[i]);
+                    flagList.appendChild(item);
+                }
+            })
+            .catch(function (err) {
+                console.warn('Failed to refresh flag sidebar:', err);
+            });
     }
 
-    function createFlagItem(flagId, comment, flagElement) {
+    function createFlagItemFromData(flag) {
         var item = document.createElement('div');
         item.className = 'flag-item';
-        item.setAttribute('data-flag-id', flagId);
+        item.setAttribute('data-flag-id', flag.id);
 
+        // Header
         var header = document.createElement('div');
         header.className = 'flag-item-header';
-
         var idLabel = document.createElement('span');
         idLabel.className = 'flag-item-id';
-        idLabel.textContent = 'Flag #' + flagId;
-
+        idLabel.textContent = 'Flag #' + flag.id;
         header.appendChild(idLabel);
         item.appendChild(header);
 
-        if (comment) {
-            var commentEl = document.createElement('div');
-            commentEl.className = 'flag-item-comment';
-            commentEl.textContent = comment;
-            item.appendChild(commentEl);
-        }
+        // Comment
+        var commentEl = document.createElement('div');
+        commentEl.className = 'flag-item-comment';
+        commentEl.textContent = flag.comment;
+        item.appendChild(commentEl);
 
-        // Click sidebar item -> scroll to document flag
-        item.addEventListener('click', function () {
-            if (flagElement) {
-                flagElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                flagElement.classList.add('flag-highlight');
+        // Actions row
+        var actions = document.createElement('div');
+        actions.className = 'flag-item-actions';
+
+        var editBtn = document.createElement('button');
+        editBtn.className = 'flag-action-btn flag-action-btn-edit';
+        editBtn.type = 'button';
+        editBtn.textContent = 'Edit';
+        actions.appendChild(editBtn);
+
+        var deleteBtn = document.createElement('button');
+        deleteBtn.className = 'flag-action-btn flag-action-btn-delete';
+        deleteBtn.type = 'button';
+        deleteBtn.textContent = 'Delete';
+        actions.appendChild(deleteBtn);
+
+        item.appendChild(actions);
+
+        // Click item -> scroll to flag in document
+        item.addEventListener('click', function (e) {
+            if (e.target === editBtn || e.target === deleteBtn) return;
+            var flagEl = document.querySelector('.flag[data-flag-id="' + flag.id + '"]');
+            if (flagEl) {
+                flagEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                flagEl.classList.add('flag-highlight');
                 setTimeout(function () {
-                    flagElement.classList.remove('flag-highlight');
+                    flagEl.classList.remove('flag-highlight');
                 }, 2000);
             }
         });
 
+        // Delete handler
+        deleteBtn.addEventListener('click', function () {
+            var url = '/flag/' + flag.id + '/' + currentFilepath.split('/').map(encodeURIComponent).join('/');
+            fetch(url, { method: 'DELETE' })
+                .then(function (r) {
+                    if (!r.ok) throw new Error('Delete failed: ' + r.status);
+                    refreshFlagSidebar();
+                })
+                .catch(function (err) {
+                    console.warn('Failed to delete flag:', err);
+                });
+        });
+
+        // Edit handler
+        editBtn.addEventListener('click', function () {
+            enterEditMode(item, flag, commentEl, actions);
+        });
+
         return item;
+    }
+
+    function enterEditMode(item, flag, commentEl, actionsEl) {
+        // Hide comment and actions
+        commentEl.style.display = 'none';
+        actionsEl.style.display = 'none';
+
+        // Create edit input
+        var editContainer = document.createElement('div');
+        editContainer.className = 'flag-edit-container';
+
+        var input = document.createElement('input');
+        input.className = 'flag-edit-input';
+        input.type = 'text';
+        input.value = flag.comment;
+        editContainer.appendChild(input);
+
+        var editActions = document.createElement('div');
+        editActions.className = 'flag-edit-actions';
+
+        var saveBtn = document.createElement('button');
+        saveBtn.className = 'flag-action-btn flag-action-btn-save';
+        saveBtn.type = 'button';
+        saveBtn.textContent = 'Save';
+        editActions.appendChild(saveBtn);
+
+        var cancelBtn = document.createElement('button');
+        cancelBtn.className = 'flag-action-btn flag-action-btn-cancel';
+        cancelBtn.type = 'button';
+        cancelBtn.textContent = 'Cancel';
+        editActions.appendChild(cancelBtn);
+
+        editContainer.appendChild(editActions);
+        item.appendChild(editContainer);
+
+        input.focus();
+        input.select();
+
+        function exitEditMode() {
+            commentEl.style.display = '';
+            actionsEl.style.display = '';
+            if (editContainer.parentNode) {
+                editContainer.parentNode.removeChild(editContainer);
+            }
+        }
+
+        function saveEdit() {
+            var newComment = input.value.trim();
+            if (!newComment) {
+                exitEditMode();
+                return;
+            }
+            var url = '/flag/' + flag.id + '/' + currentFilepath.split('/').map(encodeURIComponent).join('/');
+            fetch(url, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ comment: newComment })
+            })
+            .then(function (r) {
+                if (!r.ok) throw new Error('Update failed: ' + r.status);
+                refreshFlagSidebar();
+            })
+            .catch(function (err) {
+                console.warn('Failed to update flag:', err);
+                exitEditMode();
+            });
+        }
+
+        saveBtn.addEventListener('click', saveEdit);
+        cancelBtn.addEventListener('click', exitEditMode);
+        input.addEventListener('keydown', function (e) {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                saveEdit();
+            }
+            if (e.key === 'Escape') {
+                exitEditMode();
+            }
+        });
+    }
+
+    function initFlagSidebar() {
+        // Extract filepath from breadcrumb for API calls
+        var breadcrumbCurrent = document.querySelector('.breadcrumb-current');
+        var breadcrumbLinks = document.querySelectorAll('.breadcrumb-link');
+        if (breadcrumbCurrent) {
+            var parts = [];
+            for (var i = 1; i < breadcrumbLinks.length; i++) {
+                parts.push(breadcrumbLinks[i].textContent.trim());
+            }
+            parts.push(breadcrumbCurrent.textContent.trim());
+            currentFilepath = parts.join('/');
+        }
+
+        refreshFlagSidebar();
     }
 
     /* ----------------------------------------------------------------------
@@ -366,19 +494,6 @@
     function initFlagToolbar() {
         var documentEl = document.getElementById('document');
         if (!documentEl) return;
-
-        // Extract filepath from breadcrumb
-        var breadcrumbCurrent = document.querySelector('.breadcrumb-current');
-        var breadcrumbLinks = document.querySelectorAll('.breadcrumb-link');
-        if (breadcrumbCurrent) {
-            // Build path from breadcrumb links + current
-            var parts = [];
-            for (var i = 1; i < breadcrumbLinks.length; i++) { // skip 'root'
-                parts.push(breadcrumbLinks[i].textContent.trim());
-            }
-            parts.push(breadcrumbCurrent.textContent.trim());
-            currentFilepath = parts.join('/');
-        }
 
         // Create the toolbar element
         toolbar = document.createElement('div');
@@ -512,7 +627,7 @@
         })
         .then(function (response) {
             if (response.ok) {
-                window.location.reload();
+                refreshFlagSidebar();
             } else {
                 response.text().then(function (text) {
                     var errorMsg = 'Failed to create flag';
