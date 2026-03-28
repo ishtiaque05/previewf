@@ -109,6 +109,38 @@ pub fn inject_flag(content: &str, line: usize, comment: &str) -> Result<String, 
     Ok(output)
 }
 
+/// Remove a flag by ID from the content.
+/// Returns the content with the flag tag stripped, preserving surrounding text.
+pub fn remove_flag(content: &str, id: u32) -> Result<String, PreviewError> {
+    let target = Regex::new(&format!(r"<flag:{id}>Comment:\s*.+?</flag>")).unwrap();
+    let mut found = false;
+
+    let result: Vec<String> = content
+        .lines()
+        .map(|line| {
+            if target.is_match(line) {
+                found = true;
+                target.replace_all(line, "").to_string()
+            } else {
+                line.to_string()
+            }
+        })
+        .collect();
+
+    if !found {
+        return Err(PreviewError::FlagParse {
+            line: 0,
+            detail: format!("Flag with ID {} not found", id),
+        });
+    }
+
+    let mut output = result.join("\n");
+    if content.ends_with('\n') {
+        output.push('\n');
+    }
+    Ok(output)
+}
+
 /// Format flags as human-readable text output.
 pub fn format_flags_text(report: &FlagReport) -> String {
     let mut output = format!("Flags in {}:\n\n", report.file);

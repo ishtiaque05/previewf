@@ -1,4 +1,6 @@
-use previewf::flags::{extract_flags, format_flags_text, inject_flag, Flag, FlagReport};
+use previewf::flags::{
+    extract_flags, format_flags_text, inject_flag, remove_flag, Flag, FlagReport,
+};
 
 // --- extract_flags ---
 
@@ -266,4 +268,43 @@ fn test_format_flags_text_empty() {
     };
     let output = format_flags_text(&report);
     assert!(output.contains("No flags found."));
+}
+
+// --- remove_flag ---
+
+#[test]
+fn test_remove_flag_removes_single_flag() {
+    let content = "This line has <flag:1>Comment: something</flag> a flag.\n";
+    let result = remove_flag(content, 1).unwrap();
+    assert_eq!(result, "This line has  a flag.\n");
+    assert!(extract_flags(&result).is_empty());
+}
+
+#[test]
+fn test_remove_flag_preserves_other_flags() {
+    let content = "Line <flag:1>Comment: first</flag> with <flag:2>Comment: second</flag> two.\n";
+    let result = remove_flag(content, 1).unwrap();
+    assert!(result.contains("<flag:2>"));
+    assert!(!result.contains("<flag:1>"));
+}
+
+#[test]
+fn test_remove_flag_not_found_returns_error() {
+    let content = "No flags here.\n";
+    let result = remove_flag(content, 99);
+    assert!(result.is_err());
+}
+
+#[test]
+fn test_remove_flag_preserves_trailing_newline() {
+    let content = "Line <flag:1>Comment: test</flag> here.\n";
+    let result = remove_flag(content, 1).unwrap();
+    assert!(result.ends_with('\n'));
+}
+
+#[test]
+fn test_remove_flag_no_trailing_newline() {
+    let content = "Line <flag:1>Comment: test</flag> here.";
+    let result = remove_flag(content, 1).unwrap();
+    assert!(!result.ends_with('\n'));
 }
