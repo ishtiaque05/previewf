@@ -508,6 +508,207 @@ async fn test_flag_post_non_markdown_returns_400() {
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 }
 
+// --- Flag DELETE endpoint ---
+
+#[tokio::test]
+async fn test_flag_delete_removes_flag() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let file_path = dir.path().join("test.md");
+    std::fs::write(
+        &file_path,
+        "Hello <flag:1>Comment: remove me</flag> world.\n",
+    )
+    .unwrap();
+
+    let config = ServerBuilder::new()
+        .path(dir.path())
+        .port(0)
+        .live_reload(false)
+        .build()
+        .unwrap();
+    let app = create_router(config);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri("/flag/1/test.md")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let content = std::fs::read_to_string(&file_path).unwrap();
+    assert!(
+        !content.contains("<flag:1>"),
+        "Flag should be removed from file"
+    );
+    assert!(
+        content.contains("Hello"),
+        "Surrounding text should be preserved"
+    );
+}
+
+#[tokio::test]
+async fn test_flag_delete_not_found_returns_404() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let file_path = dir.path().join("test.md");
+    std::fs::write(&file_path, "No flags here.\n").unwrap();
+
+    let config = ServerBuilder::new()
+        .path(dir.path())
+        .port(0)
+        .live_reload(false)
+        .build()
+        .unwrap();
+    let app = create_router(config);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri("/flag/99/test.md")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn test_flag_delete_non_markdown_returns_400() {
+    let dir = tempfile::TempDir::new().unwrap();
+    std::fs::write(dir.path().join("test.html"), "<html></html>").unwrap();
+
+    let config = ServerBuilder::new()
+        .path(dir.path())
+        .port(0)
+        .live_reload(false)
+        .build()
+        .unwrap();
+    let app = create_router(config);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri("/flag/1/test.html")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
+// --- Flag PUT endpoint ---
+
+#[tokio::test]
+async fn test_flag_put_updates_comment() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let file_path = dir.path().join("test.md");
+    std::fs::write(&file_path, "Line <flag:1>Comment: old</flag> here.\n").unwrap();
+
+    let config = ServerBuilder::new()
+        .path(dir.path())
+        .port(0)
+        .live_reload(false)
+        .build()
+        .unwrap();
+    let app = create_router(config);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("PUT")
+                .uri("/flag/1/test.md")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({ "comment": "updated comment" }).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let content = std::fs::read_to_string(&file_path).unwrap();
+    assert!(
+        content.contains("updated comment"),
+        "Comment should be updated"
+    );
+    assert!(!content.contains("old"), "Old comment should be replaced");
+}
+
+#[tokio::test]
+async fn test_flag_put_not_found_returns_404() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let file_path = dir.path().join("test.md");
+    std::fs::write(&file_path, "No flags.\n").unwrap();
+
+    let config = ServerBuilder::new()
+        .path(dir.path())
+        .port(0)
+        .live_reload(false)
+        .build()
+        .unwrap();
+    let app = create_router(config);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("PUT")
+                .uri("/flag/99/test.md")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({ "comment": "anything" }).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn test_flag_put_empty_comment_returns_400() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let file_path = dir.path().join("test.md");
+    std::fs::write(&file_path, "Line <flag:1>Comment: old</flag> here.\n").unwrap();
+
+    let config = ServerBuilder::new()
+        .path(dir.path())
+        .port(0)
+        .live_reload(false)
+        .build()
+        .unwrap();
+    let app = create_router(config);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("PUT")
+                .uri("/flag/1/test.md")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({ "comment": "  " }).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
 // --- Security headers ---
 
 #[tokio::test]
