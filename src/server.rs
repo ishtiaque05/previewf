@@ -278,9 +278,9 @@ fn listing_response(state: &AppState, subpath: &str) -> Response {
         }
     }
 
-    dirs.sort_by(|a, b| a.to_lowercase().cmp(&b.to_lowercase()));
-    md_files.sort_by(|a, b| a.0.to_lowercase().cmp(&b.0.to_lowercase()));
-    json_files.sort_by(|a, b| a.to_lowercase().cmp(&b.to_lowercase()));
+    dirs.sort_by_key(|a| a.to_lowercase());
+    md_files.sort_by_key(|a| a.0.to_lowercase());
+    json_files.sort_by_key(|a| a.to_lowercase());
     html_files.sort_unstable();
 
     // Build path prefix for links
@@ -916,8 +916,8 @@ fn build_tree(dir: &Path, base: &Path) -> Vec<TreeNode> {
         }
     }
 
-    dirs.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
-    files.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    dirs.sort_by_key(|a| a.name.to_lowercase());
+    files.sort_by_key(|a| a.name.to_lowercase());
     dirs.extend(files);
     dirs
 }
