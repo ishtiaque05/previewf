@@ -512,7 +512,7 @@ fn resolve_path(base: &Path, filepath: &str) -> Option<PathBuf> {
     }
 }
 
-fn is_markdown(name: &str) -> bool {
+pub fn is_markdown(name: &str) -> bool {
     let lower = name.to_lowercase();
     lower.ends_with(".md") || lower.ends_with(".markdown") || lower.ends_with(".mkd")
 }

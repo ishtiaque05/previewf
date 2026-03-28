@@ -163,3 +163,23 @@ Browser POST /flag/plan.md {comment, selected_text}
 - 404 for missing files
 - Static asset serving (CSS, JS)
 - Builder validation (missing path error)
+
+---
+
+## PR #6: CLI Integration (Task 9)
+
+**Branch:** `feat/cli-integration`
+
+### What was built
+
+Wired the three stub CLI subcommands in `src/main.rs` to their actual implementations:
+
+- **`serve`** — builds `ServerConfig` via `ServerBuilder`, calls `server::run()` which starts the axum server with file watcher integration
+- **`view`** — reads the markdown file, passes it through `render_terminal()` for termimad output
+- **`flags`** — reads the markdown file, calls `extract_flags()`, outputs either human-readable text via `format_flags_text()` or JSON via `serde_json`
+
+### Notes
+
+- Task 10 (file watcher integration with server) was already completed as part of the server stack (PR #4) — the `run()` function in `server.rs` spawns a background watcher task when `live_reload` is enabled
+- No new dependencies added — `anyhow::Context` was already available
+- All 53 existing tests continue to pass

@@ -1,7 +1,11 @@
 use std::path::PathBuf;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
+
+use previewf::flags::{extract_flags, format_flags_text, FlagReport};
+use previewf::server::{is_markdown, ServerBuilder};
+use previewf::terminal::render_terminal;
 
 #[derive(Parser)]
 #[command(
@@ -49,16 +53,58 @@ async fn main() -> Result<()> {
 
     match cli.command {
         Commands::Serve { path, port } => {
-            println!("Serving {} on port {}", path.display(), port);
-            Ok(())
+            let config = ServerBuilder::new()
+                .path(&path)
+                .port(port)
+                .live_reload(true)
+                .build()
+                .context("Failed to configure server")?;
+
+            previewf::server::run(config).await?;
         }
         Commands::View { path } => {
-            println!("Viewing {}", path.display());
-            Ok(())
+            let name = path.to_string_lossy();
+            anyhow::ensure!(
+                is_markdown(&name),
+                "Not a markdown file: {}",
+                path.display()
+            );
+
+            let content = std::fs::read_to_string(&path)
+                .with_context(|| format!("Cannot read file: {}", path.display()))?;
+
+            let rendered = render_terminal(&content);
+            print!("{rendered}");
         }
         Commands::Flags { path, json } => {
-            println!("Extracting flags from {} (json: {})", path.display(), json);
-            Ok(())
+            let name = path.to_string_lossy();
+            anyhow::ensure!(
+                is_markdown(&name),
+                "Not a markdown file: {}",
+                path.display()
+            );
+
+            let content = std::fs::read_to_string(&path)
+                .with_context(|| format!("Cannot read file: {}", path.display()))?;
+
+            let flags = extract_flags(&content);
+            let filename = path
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .to_string();
+            let report = FlagReport {
+                file: filename,
+                flags,
+            };
+
+            if json {
+                println!("{}", serde_json::to_string_pretty(&report)?);
+            } else {
+                print!("{}", format_flags_text(&report));
+            }
         }
     }
+
+    Ok(())
 }
