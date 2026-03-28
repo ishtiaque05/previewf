@@ -1,8 +1,9 @@
-name: Release
+name: Release Previewf
 
 on:
   push:
-    tags: ["v*"]
+    tags:
+      - "v*"
 
 permissions:
   contents: write
@@ -16,24 +17,38 @@ jobs:
         include:
           - target: x86_64-unknown-linux-gnu
             os: ubuntu-latest
-            archive: previewf-x86_64-unknown-linux-gnu.tar.gz
+            archive: previewf-linux-amd64.tar.gz
           - target: aarch64-unknown-linux-gnu
             os: ubuntu-latest
-            archive: previewf-aarch64-unknown-linux-gnu.tar.gz
+            archive: previewf-linux-arm64.tar.gz
           - target: x86_64-apple-darwin
             os: macos-latest
-            archive: previewf-x86_64-apple-darwin.tar.gz
+            archive: previewf-macos-amd64.tar.gz
           - target: aarch64-apple-darwin
             os: macos-latest
-            archive: previewf-aarch64-apple-darwin.tar.gz
+            archive: previewf-macos-arm64.tar.gz
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
+
+      - name: Cache Cargo Dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            ~/.cargo/bin
+            target
+          key: cargo-${{ runner.os }}-${{ matrix.target }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            cargo-${{ runner.os }}-${{ matrix.target }}-
 
       - name: Install cross-compilation tools
         if: matrix.target == 'aarch64-unknown-linux-gnu'
@@ -66,13 +81,73 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Extract and Format Version
+        run: echo "LIB_VERSION=$(echo "$GITHUB_REF_NAME" | sed -E 's/^v//')" >> "$GITHUB_ENV"
+
+      - name: Find Previous Tag
+        run: |
+          PREV=$(git describe --tags --abbrev=0 "$(git rev-list --tags --skip=1 --max-count=1)" 2>/dev/null || echo "")
+          echo "PREV_TAG=$PREV" >> "$GITHUB_ENV"
+
+      - name: Find Source Branch
+        run: |
+          BRANCH_NAME=$(git branch -r --contains "$GITHUB_SHA" | grep -v 'HEAD' | head -n 1 | awk '{print $1}' | sed 's/origin\///')
+          echo "BRANCH_NAME=$BRANCH_NAME" >> "$GITHUB_ENV"
+
+      - name: Generate Changelog
+        run: |
+          if [ -z "$PREV_TAG" ]; then
+            CHANGELOG=$(git log --pretty=format:'- %s' "$(git rev-list --max-parents=0 HEAD)..HEAD" | sed ':a;N;$!ba;s/\n/\\n/g')
+          else
+            CHANGELOG=$(git log --pretty=format:'- %s' "$PREV_TAG..HEAD" | sed ':a;N;$!ba;s/\n/\\n/g')
+          fi
+          echo "CHANGELOG<<EOF" >> "$GITHUB_ENV"
+          echo -e "$CHANGELOG" >> "$GITHUB_ENV"
+          echo "EOF" >> "$GITHUB_ENV"
+
       - name: Download all artifacts
         uses: actions/download-artifact@v4
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
+        env:
+          LIB_VERSION: ${{ env.LIB_VERSION }}
+          PREV_TAG: ${{ env.PREV_TAG }}
+          BRANCH_NAME: ${{ env.BRANCH_NAME }}
+          CHANGELOG: ${{ env.CHANGELOG }}
         with:
-          generate_release_notes: true
+          token: ${{ secrets.GITHUB_TOKEN }}
+          tag_name: ${{ github.ref_name }}
+          name: "Previewf ${{ env.LIB_VERSION }}"
           files: |
             **/*.tar.gz
             **/*.sha256
+          body: |
+            **New release of Previewf ${{ env.LIB_VERSION }}**!
+
+            ### Release Branch:
+            This release was tagged from the **`${{ env.BRANCH_NAME }}`** branch.
+
+            ### Changes:
+            ${{ env.CHANGELOG }}
+
+            ### Compare Changes:
+            [View Diff](https://github.com/ishtiaque05/previewf/compare/${{ env.PREV_TAG }}...${{ github.ref_name }})
+
+            ### Manual Install (macOS Apple Silicon):
+            ```sh
+            curl -LO https://github.com/ishtiaque05/previewf/releases/download/${{ github.ref_name }}/previewf-macos-arm64.tar.gz
+            tar xzf previewf-macos-arm64.tar.gz
+            sudo mv previewf /usr/local/bin/
+            ```
+
+            ### Manual Install (Linux x86_64):
+            ```sh
+            wget https://github.com/ishtiaque05/previewf/releases/download/${{ github.ref_name }}/previewf-linux-amd64.tar.gz
+            tar xzf previewf-linux-amd64.tar.gz
+            sudo mv previewf /usr/local/bin/
+            ```
