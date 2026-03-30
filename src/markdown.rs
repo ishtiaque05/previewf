@@ -100,10 +100,13 @@ fn render_flags(html: &str) -> String {
     FLAG_RE
         .replace_all(html, |caps: &regex::Captures| {
             let id = &caps[1];
+            let label = &caps[2];
             let comment = html::escape(caps[3].trim());
+            let label_lower = label.to_lowercase();
             format!(
-                "<span class=\"flag\" data-flag-id=\"{id}\">\
+                "<span class=\"flag\" data-flag-id=\"{id}\" data-flag-label=\"{label}\">\
                  <span class=\"flag-marker\">#{id}</span>\
+                 <span class=\"flag-label\" data-label=\"{label_lower}\">{label}</span>\
                  <span class=\"flag-comment\">{comment}</span>\
                  </span>"
             )
@@ -130,9 +133,19 @@ mod tests {
         let result = render_flags(input);
         expect_that!(result, contains_substring("class=\"flag\""));
         expect_that!(result, contains_substring("data-flag-id=\"1\""));
+        expect_that!(result, contains_substring("data-flag-label=\"Comment\""));
         expect_that!(result, contains_substring("class=\"flag-marker\""));
+        expect_that!(result, contains_substring("class=\"flag-label\""));
         expect_that!(result, contains_substring("class=\"flag-comment\""));
         expect_that!(result, contains_substring("something"));
+    }
+
+    #[gtest]
+    fn test_render_flag_includes_label() {
+        let html = render_html("<flag:1>Bug: broken thing</flag>");
+        expect_that!(html, contains_substring("data-flag-id=\"1\""));
+        expect_that!(html, contains_substring("data-flag-label=\"Bug\""));
+        expect_that!(html, contains_substring("broken thing"));
     }
 
     #[gtest]

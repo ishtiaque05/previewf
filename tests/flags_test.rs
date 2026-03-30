@@ -279,9 +279,9 @@ fn test_format_flags_text_with_flags() {
     };
     let output = format_flags_text(&report);
     assert!(output.contains("Flags in test.md:"));
-    assert!(output.contains("#1 (line 3): needs rework"));
+    assert!(output.contains("#1 [Comment] (line 3): needs rework"));
     assert!(output.contains("Context: some text"));
-    assert!(output.contains("#2 (line 7): contradicts intro"));
+    assert!(output.contains("#2 [Comment] (line 7): contradicts intro"));
 }
 
 #[test]

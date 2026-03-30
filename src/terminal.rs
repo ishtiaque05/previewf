@@ -12,7 +12,7 @@ pub fn render_terminal(content: &str) -> String {
 
 fn prepare_flags_for_terminal(content: &str) -> String {
     FLAG_RE
-        .replace_all(content, "**[FLAG #$1:** $3**]**")
+        .replace_all(content, "**[FLAG #$1 $2:** $3**]**")
         .into_owned()
 }
 
@@ -25,15 +25,15 @@ mod tests {
     fn test_prepare_flags_basic() {
         let input = "<flag:1>Comment: check this</flag>";
         let result = prepare_flags_for_terminal(input);
-        expect_that!(result, eq("**[FLAG #1:** check this**]**"));
+        expect_that!(result, eq("**[FLAG #1 Comment:** check this**]**"));
     }
 
     #[gtest]
     fn test_prepare_flags_multiple() {
-        let input = "Text <flag:1>Comment: first</flag> and <flag:2>Comment: second</flag>.";
+        let input = "Text <flag:1>Comment: first</flag> and <flag:2>Bug: second</flag>.";
         let result = prepare_flags_for_terminal(input);
-        expect_that!(result, contains_substring("FLAG #1"));
-        expect_that!(result, contains_substring("FLAG #2"));
+        expect_that!(result, contains_substring("FLAG #1 Comment"));
+        expect_that!(result, contains_substring("FLAG #2 Bug"));
         expect_that!(result, contains_substring("first"));
         expect_that!(result, contains_substring("second"));
     }

@@ -214,8 +214,8 @@ pub fn format_flags_text(report: &FlagReport) -> String {
 
     for flag in &report.flags {
         output.push_str(&format!(
-            "  #{} (line {}): {}\n    Context: {}\n\n",
-            flag.id, flag.line, flag.comment, flag.context
+            "  #{} [{}] (line {}): {}\n    Context: {}\n\n",
+            flag.id, flag.label, flag.line, flag.comment, flag.context
         ));
     }
 
