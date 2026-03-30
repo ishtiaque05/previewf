@@ -19,6 +19,34 @@
         setTimeout(function () { suppressReload = false; }, 500);
     }
 
+    var SIDEBAR_COLLAPSED_KEY = 'previewf-sidebar-collapsed';
+
+    function initSidebarToggle() {
+        var sidebar = document.getElementById('sidebar');
+        var toggle = document.getElementById('sidebar-toggle');
+        if (!sidebar || !toggle) return;
+
+        if (localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === 'true') {
+            sidebar.classList.add('collapsed');
+            toggle.textContent = '\u203A';
+        }
+
+        toggle.addEventListener('click', function (e) {
+            e.stopPropagation();
+            var isCollapsed = sidebar.classList.toggle('collapsed');
+            toggle.textContent = isCollapsed ? '\u203A' : '\u2039';
+            localStorage.setItem(SIDEBAR_COLLAPSED_KEY, isCollapsed ? 'true' : 'false');
+        });
+
+        sidebar.addEventListener('click', function (e) {
+            if (sidebar.classList.contains('collapsed') && e.target !== toggle) {
+                sidebar.classList.remove('collapsed');
+                toggle.textContent = '\u2039';
+                localStorage.setItem(SIDEBAR_COLLAPSED_KEY, 'false');
+            }
+        });
+    }
+
     var THEME_KEY = 'previewf-theme';
 
     function getPreferredTheme() {
@@ -304,6 +332,11 @@
                     flagCountEl.textContent = String(flags.length);
                 }
 
+                var sidebarBadge = document.getElementById('sidebar-badge');
+                if (sidebarBadge) {
+                    sidebarBadge.textContent = String(flags.length);
+                }
+
                 if (flags.length === 0) {
                     var emptyMsg = document.createElement('p');
                     emptyMsg.className = 'flag-list-empty';
@@ -337,6 +370,13 @@
         idLabel.className = 'flag-item-id';
         idLabel.textContent = 'Flag #' + flag.id;
         header.appendChild(idLabel);
+
+        var labelBadge = document.createElement('span');
+        labelBadge.className = 'flag-label';
+        labelBadge.setAttribute('data-label', flag.label.toLowerCase());
+        labelBadge.textContent = flag.label;
+        header.appendChild(labelBadge);
+
         item.appendChild(header);
 
         // Comment
@@ -773,6 +813,7 @@
     document.addEventListener('DOMContentLoaded', function () {
         initTheme();
         initNavSidebar();
+        initSidebarToggle();
         initFlagSidebar();
         initFlagToolbar();
         initWebSocket();
