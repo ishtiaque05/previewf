@@ -338,7 +338,7 @@ fn test_remove_flag_no_trailing_newline() {
 #[test]
 fn test_update_flag_comment_changes_comment() {
     let content = "Line <flag:1>Comment: old comment</flag> here.\n";
-    let result = update_flag_comment(content, 1, "new comment").unwrap();
+    let result = update_flag_comment(content, 1, "new comment", None).unwrap();
     assert!(result.contains("<flag:1>Comment: new comment</flag>"));
     assert!(!result.contains("old comment"));
 }
@@ -346,7 +346,7 @@ fn test_update_flag_comment_changes_comment() {
 #[test]
 fn test_update_flag_comment_sanitizes_input() {
     let content = "Line <flag:1>Comment: safe</flag> here.\n";
-    let result = update_flag_comment(content, 1, "<script>alert(1)</script>").unwrap();
+    let result = update_flag_comment(content, 1, "<script>alert(1)</script>", None).unwrap();
     assert!(result.contains("&lt;script&gt;"));
     assert!(!result.contains("<script>"));
 }
@@ -354,7 +354,7 @@ fn test_update_flag_comment_sanitizes_input() {
 #[test]
 fn test_update_flag_comment_preserves_other_flags() {
     let content = "A <flag:1>Comment: first</flag> B <flag:2>Comment: second</flag>\n";
-    let result = update_flag_comment(content, 1, "updated").unwrap();
+    let result = update_flag_comment(content, 1, "updated", None).unwrap();
     assert!(result.contains("<flag:1>Comment: updated</flag>"));
     assert!(result.contains("<flag:2>Comment: second</flag>"));
 }
@@ -362,15 +362,41 @@ fn test_update_flag_comment_preserves_other_flags() {
 #[test]
 fn test_update_flag_comment_not_found_returns_error() {
     let content = "No flags.\n";
-    let result = update_flag_comment(content, 99, "anything");
+    let result = update_flag_comment(content, 99, "anything", None);
     assert!(result.is_err());
 }
 
 #[test]
 fn test_update_flag_comment_preserves_trailing_newline() {
     let content = "Line <flag:1>Comment: old</flag> here.\n";
-    let result = update_flag_comment(content, 1, "new").unwrap();
+    let result = update_flag_comment(content, 1, "new", None).unwrap();
     assert!(result.ends_with('\n'));
+}
+
+// --- remove_flag label-aware ---
+
+#[test]
+fn test_remove_flag_with_non_comment_label() {
+    let content = "Line <flag:1>Bug: broken thing</flag> here.\n";
+    let result = remove_flag(content, 1).unwrap();
+    assert!(!result.contains("<flag:1>"));
+    assert!(result.contains("Line"));
+}
+
+// --- update_flag_comment label-aware ---
+
+#[test]
+fn test_update_flag_comment_with_label() {
+    let content = "Line <flag:1>Bug: old text</flag> here.\n";
+    let result = update_flag_comment(content, 1, "new text", None).unwrap();
+    assert!(result.contains("<flag:1>Bug: new text</flag>"));
+}
+
+#[test]
+fn test_update_flag_changes_label() {
+    let content = "Line <flag:1>Comment: some note</flag> here.\n";
+    let result = update_flag_comment(content, 1, "some note", Some("Bug")).unwrap();
+    assert!(result.contains("<flag:1>Bug: some note</flag>"));
 }
 
 // --- inject_flag label ---

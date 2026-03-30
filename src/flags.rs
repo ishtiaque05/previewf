@@ -120,7 +120,7 @@ pub fn inject_flag(
 /// Remove a flag by ID from the content.
 /// Returns the content with the flag tag stripped, preserving surrounding text.
 pub fn remove_flag(content: &str, id: u32) -> Result<String, PreviewError> {
-    let target = Regex::new(&format!(r"<flag:{id}>Comment:\s*.+?</flag>")).map_err(|e| {
+    let target = Regex::new(&format!(r"<flag:{id}>\w+:\s*.+?</flag>")).map_err(|e| {
         PreviewError::FlagParse {
             line: 0,
             detail: format!("Invalid flag regex for ID {id}: {e}"),
@@ -156,19 +156,20 @@ pub fn remove_flag(content: &str, id: u32) -> Result<String, PreviewError> {
 
 /// Update the comment of an existing flag by ID.
 /// The new comment is sanitized before insertion.
+/// If `new_label` is `Some`, the label is also updated; otherwise the existing label is preserved.
 pub fn update_flag_comment(
     content: &str,
     id: u32,
     new_comment: &str,
+    new_label: Option<&str>,
 ) -> Result<String, PreviewError> {
-    let target = Regex::new(&format!(r"<flag:{id}>Comment:\s*.+?</flag>")).map_err(|e| {
+    let target = Regex::new(&format!(r"<flag:{id}>(\w+):\s*.+?</flag>")).map_err(|e| {
         PreviewError::FlagParse {
             line: 0,
             detail: format!("Invalid flag regex for ID {id}: {e}"),
         }
     })?;
     let sanitized = sanitize_comment(new_comment);
-    let replacement = format!("<flag:{id}>Comment: {sanitized}</flag>");
     let mut found = false;
 
     let result: Vec<String> = content
@@ -177,7 +178,10 @@ pub fn update_flag_comment(
             if target.is_match(line) {
                 found = true;
                 target
-                    .replace_all(line, regex::NoExpand(replacement.as_str()))
+                    .replace_all(line, |caps: &regex::Captures| {
+                        let label = new_label.unwrap_or(&caps[1]);
+                        format!("<flag:{id}>{label}: {sanitized}</flag>")
+                    })
                     .to_string()
             } else {
                 line.to_string()

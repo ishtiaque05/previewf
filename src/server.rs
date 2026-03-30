@@ -860,7 +860,7 @@ async fn update_flag_handler(
         Err(_) => return not_found_response(&filepath),
     };
 
-    match update_flag_comment(&content, id, &body.comment) {
+    match update_flag_comment(&content, id, &body.comment, None) {
         Ok(new_content) => match std::fs::write(&full_path, &new_content) {
             Ok(_) => (StatusCode::OK, "Flag updated").into_response(),
             Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
