@@ -26,6 +26,15 @@
     --diff-hunk-bg: #EDE8FD;
     --diff-hunk-text: #6639BA;
 
+    /* Label colors — light */
+    --label-comment: #8b949e;
+    --label-bug: #ef4444;
+    --label-todo: #3b82f6;
+    --label-question: #ffa500;
+    --label-note: #10b981;
+    --label-style: #a855f7;
+    --label-custom: #ec4899;
+
     /* Shadows and borders */
     --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.06);
     --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.08);
@@ -56,6 +65,15 @@
     --diff-removed-text: #f85149;
     --diff-hunk-bg: #1b1836;
     --diff-hunk-text: #bc8cff;
+
+    /* Label colors — dark */
+    --label-comment: #8b949e;
+    --label-bug: #f87171;
+    --label-todo: #60a5fa;
+    --label-question: #fbbf24;
+    --label-note: #34d399;
+    --label-style: #c084fc;
+    --label-custom: #f472b6;
 
     /* Shadows and borders */
     --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
@@ -456,6 +474,78 @@ img {
     border-bottom: 1px solid var(--border-color);
 }
 
+.sidebar-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 1em;
+    padding-bottom: 0.6em;
+    border-bottom: 1px solid var(--border-color);
+}
+
+.sidebar-header .sidebar-title {
+    margin: 0;
+    padding: 0;
+    border: none;
+}
+
+.sidebar-toggle {
+    background: none;
+    border: none;
+    color: var(--text-muted);
+    cursor: pointer;
+    font-size: 0.9rem;
+    padding: 0.1em 0.3em;
+    border-radius: 3px;
+    transition: color 200ms ease, background-color 200ms ease;
+}
+
+.sidebar-toggle:hover {
+    color: var(--accent);
+    background-color: var(--bg-surface);
+}
+
+.sidebar.collapsed {
+    width: 36px;
+    padding: 0.8em 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+}
+
+.sidebar.collapsed .sidebar-header {
+    flex-direction: column;
+    border: none;
+    margin: 0;
+    padding: 0;
+    gap: 0.5em;
+}
+
+.sidebar.collapsed .sidebar-title {
+    display: none;
+}
+
+.sidebar.collapsed .flag-list {
+    display: none;
+}
+
+.sidebar-badge {
+    background: var(--accent);
+    color: var(--bg);
+    font-size: 0.55rem;
+    font-weight: 700;
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.sidebar:not(.collapsed) .sidebar-badge {
+    display: none;
+}
+
 .flag-list {
     display: flex;
     flex-direction: column;
@@ -531,6 +621,45 @@ img {
     color: var(--accent);
     text-transform: uppercase;
     letter-spacing: 0.05em;
+}
+
+.flag-label {
+    font-size: 0.55rem;
+    font-weight: 600;
+    padding: 0.1em 0.4em;
+    border-radius: 3px;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+}
+
+.flag-label[data-label="comment"] {
+    background: color-mix(in srgb, var(--label-comment) 20%, transparent);
+    color: var(--label-comment);
+}
+.flag-label[data-label="bug"] {
+    background: color-mix(in srgb, var(--label-bug) 20%, transparent);
+    color: var(--label-bug);
+}
+.flag-label[data-label="todo"] {
+    background: color-mix(in srgb, var(--label-todo) 20%, transparent);
+    color: var(--label-todo);
+}
+.flag-label[data-label="question"] {
+    background: color-mix(in srgb, var(--label-question) 20%, transparent);
+    color: var(--label-question);
+}
+.flag-label[data-label="note"] {
+    background: color-mix(in srgb, var(--label-note) 20%, transparent);
+    color: var(--label-note);
+}
+.flag-label[data-label="style"] {
+    background: color-mix(in srgb, var(--label-style) 20%, transparent);
+    color: var(--label-style);
+}
+/* Fallback for custom/unknown labels */
+.flag-label:not([data-label="comment"]):not([data-label="bug"]):not([data-label="todo"]):not([data-label="question"]):not([data-label="note"]):not([data-label="style"]) {
+    background: color-mix(in srgb, var(--label-custom) 20%, transparent);
+    color: var(--label-custom);
 }
 
 .flag-item-line {
@@ -630,6 +759,57 @@ img {
 
 .flag-toolbar-btn-submit:hover {
     opacity: 0.9;
+}
+
+/* --------------------------------------------------------------------------
+   Label Picker
+   -------------------------------------------------------------------------- */
+.flag-label-picker {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.3em;
+    margin-bottom: 0.5em;
+}
+
+.flag-label-pill {
+    font-family: 'DM Sans', system-ui, sans-serif;
+    font-size: 0.6rem;
+    font-weight: 600;
+    padding: 0.2em 0.5em;
+    border-radius: 3px;
+    border: 1px solid var(--border-color);
+    background: var(--bg);
+    color: var(--text-muted);
+    cursor: pointer;
+    transition: border-color 200ms ease, background-color 200ms ease, color 200ms ease;
+}
+
+.flag-label-pill:hover {
+    border-color: var(--accent);
+    color: var(--accent);
+}
+
+.flag-label-pill.selected {
+    border-color: var(--accent);
+    background: color-mix(in srgb, var(--accent) 15%, transparent);
+    color: var(--accent);
+}
+
+.flag-label-pill-custom {
+    border-style: dashed;
+}
+
+.flag-label-custom-input {
+    flex: 1;
+    min-width: 100px;
+    padding: 0.2em 0.5em;
+    font-family: 'DM Sans', system-ui, sans-serif;
+    font-size: 0.6rem;
+    border: 1px solid var(--accent);
+    border-radius: 3px;
+    background: var(--bg);
+    color: var(--text);
+    outline: none;
 }
 
 /* --------------------------------------------------------------------------
