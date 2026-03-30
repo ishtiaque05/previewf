@@ -447,6 +447,12 @@
         var editContainer = document.createElement('div');
         editContainer.className = 'flag-edit-container';
 
+        var editLabel = flag.label;
+        var editLabelPicker = createLabelPicker(editLabel, function (pickedLabel) {
+            editLabel = pickedLabel;
+        });
+        editContainer.appendChild(editLabelPicker);
+
         var input = document.createElement('input');
         input.className = 'flag-edit-input';
         input.type = 'text';
@@ -492,7 +498,7 @@
             fetch(url, {
                 method: 'PUT',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ comment: newComment })
+                body: JSON.stringify({ comment: newComment, label: editLabel })
             })
             .then(function (r) {
                 if (!r.ok) throw new Error('Update failed: ' + r.status);
@@ -537,6 +543,84 @@
        4. Flag Creation Toolbar
        ---------------------------------------------------------------------- */
 
+    var PREDEFINED_LABELS = ['Comment', 'Bug', 'Todo', 'Question', 'Note', 'Style'];
+
+    function createLabelPicker(selectedLabel, onSelect) {
+        var container = document.createElement('div');
+        container.className = 'flag-label-picker';
+
+        function renderPills() {
+            while (container.firstChild) {
+                container.removeChild(container.firstChild);
+            }
+            for (var i = 0; i < PREDEFINED_LABELS.length; i++) {
+                (function (label) {
+                    var pill = document.createElement('button');
+                    pill.type = 'button';
+                    pill.className = 'flag-label-pill';
+                    pill.setAttribute('data-label', label.toLowerCase());
+                    pill.textContent = label;
+                    if (label === selectedLabel) {
+                        pill.classList.add('selected');
+                    }
+                    pill.addEventListener('click', function (e) {
+                        e.stopPropagation();
+                        selectedLabel = label;
+                        onSelect(label);
+                        renderPills();
+                    });
+                    container.appendChild(pill);
+                })(PREDEFINED_LABELS[i]);
+            }
+            var customBtn = document.createElement('button');
+            customBtn.type = 'button';
+            customBtn.className = 'flag-label-pill flag-label-pill-custom';
+            customBtn.textContent = 'Custom\u2026';
+            if (PREDEFINED_LABELS.indexOf(selectedLabel) === -1 && selectedLabel !== '') {
+                customBtn.classList.add('selected');
+                customBtn.textContent = selectedLabel;
+            }
+            customBtn.addEventListener('click', function (e) {
+                e.stopPropagation();
+                showCustomInput();
+            });
+            container.appendChild(customBtn);
+        }
+
+        function showCustomInput() {
+            while (container.firstChild) {
+                container.removeChild(container.firstChild);
+            }
+            var input = document.createElement('input');
+            input.type = 'text';
+            input.className = 'flag-label-custom-input';
+            input.placeholder = 'Label name...';
+            input.value = PREDEFINED_LABELS.indexOf(selectedLabel) === -1 ? selectedLabel : '';
+            container.appendChild(input);
+            input.focus();
+            input.addEventListener('keydown', function (ev) {
+                if (ev.key === 'Enter') {
+                    ev.preventDefault();
+                    var val = input.value.trim();
+                    if (val) {
+                        selectedLabel = val;
+                        onSelect(val);
+                    }
+                    renderPills();
+                }
+                if (ev.key === 'Escape') {
+                    renderPills();
+                }
+            });
+            input.addEventListener('blur', function () {
+                renderPills();
+            });
+        }
+
+        renderPills();
+        return container;
+    }
+
     var toolbar = null;
     var currentFilepath = '';
 
@@ -552,6 +636,12 @@
         label.className = 'flag-toolbar-label';
         label.textContent = 'Add flag';
         toolbar.appendChild(label);
+
+        var selectedLabel = 'Comment';
+        var labelPicker = createLabelPicker(selectedLabel, function (pickedLabel) {
+            selectedLabel = pickedLabel;
+        });
+        toolbar.appendChild(labelPicker);
 
         var input = document.createElement('input');
         input.className = 'flag-toolbar-input';
@@ -604,14 +694,14 @@
 
         // Submit
         submitBtn.addEventListener('click', function () {
-            submitFlag(input.value.trim(), selectedText);
+            submitFlag(input.value.trim(), selectedText, selectedLabel);
         });
 
         // Submit on Enter key
         input.addEventListener('keydown', function (e) {
             if (e.key === 'Enter') {
                 e.preventDefault();
-                submitFlag(input.value.trim(), selectedText);
+                submitFlag(input.value.trim(), selectedText, selectedLabel);
             }
         });
 
@@ -657,7 +747,7 @@
         }
     }
 
-    function submitFlag(comment, selectedText) {
+    function submitFlag(comment, selectedText, label) {
         if (!comment || !selectedText || !currentFilepath) {
             hideToolbar();
             return;
@@ -666,7 +756,8 @@
         var url = '/flag/' + currentFilepath.split('/').map(encodeURIComponent).join('/');
         var body = JSON.stringify({
             comment: comment,
-            selected_text: selectedText
+            selected_text: selectedText,
+            label: label || 'Comment'
         });
 
         fetch(url, {
