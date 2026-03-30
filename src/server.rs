@@ -755,7 +755,7 @@ async fn flag_handler(
         }
     };
 
-    match inject_flag(&content, line, &body.comment) {
+    match inject_flag(&content, line, &body.comment, "Comment") {
         Ok(new_content) => match std::fs::write(&full_path, &new_content) {
             Ok(_) => {
                 // Don't send explicit reload — the file watcher will detect the write

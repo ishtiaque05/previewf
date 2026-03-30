@@ -75,7 +75,12 @@ fn is_code_fence(line: &str) -> bool {
 }
 
 /// Inject a new flag at the given line number (1-indexed).
-pub fn inject_flag(content: &str, line: usize, comment: &str) -> Result<String, PreviewError> {
+pub fn inject_flag(
+    content: &str,
+    line: usize,
+    comment: &str,
+    label: &str,
+) -> Result<String, PreviewError> {
     let lines: Vec<&str> = content.lines().collect();
 
     if line == 0 || line > lines.len() {
@@ -99,7 +104,7 @@ pub fn inject_flag(content: &str, line: usize, comment: &str) -> Result<String, 
 
     let sanitized = sanitize_comment(comment);
     let next_id = next_flag_id(content);
-    let flag_tag = format!(" <flag:{}>Comment: {}</flag>", next_id, sanitized);
+    let flag_tag = format!(" <flag:{next_id}>{label}: {sanitized}</flag>");
 
     let mut result: Vec<String> = lines.iter().map(|l| l.to_string()).collect();
     result[line - 1].push_str(&flag_tag);
