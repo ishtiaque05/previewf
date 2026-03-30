@@ -618,7 +618,9 @@
                     selectedLabel = val;
                     onSelect(val);
                 }
-                renderPills();
+                // Delay re-render so click on sibling elements (e.g. comment input)
+                // lands before the DOM shifts from the layout change.
+                setTimeout(renderPills, 150);
             });
         }
 
