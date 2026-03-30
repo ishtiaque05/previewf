@@ -67,10 +67,44 @@ previewf flags ./plan.md --json
 
 1. Serve a markdown file: `previewf serve ./plan.md`
 2. Select text in the browser and click "Flag"
-3. Add a comment describing the issue
-4. The flag is written back to the source file as `<flag:N>Comment: ...</flag>`
-5. Export flags: `previewf flags ./plan.md --json | pbcopy`
-6. Feed to an LLM: "Resolve everything that says flag"
+3. Choose a label (Bug, Todo, Question, Note, Style, or a custom label)
+4. Add a comment describing the issue
+5. The flag is written back to the source file as `<flag:N>Label: description</flag>`
+6. Edit or delete flags directly from the sidebar
+7. Export flags: `previewf flags ./plan.md --json | pbcopy`
+8. Feed to an LLM: "Resolve everything that says flag"
+
+### Flag Labels
+
+Flags support categorization with predefined labels:
+
+| Label    | Use for |
+|----------|---------|
+| Comment  | General notes (default) |
+| Bug      | Defects and errors |
+| Todo     | Action items |
+| Question | Clarifications needed |
+| Note     | Informational annotations |
+| Style    | Formatting and style issues |
+
+You can also create custom labels by clicking "Custom..." in the label picker.
+
+### Flag Syntax
+
+```
+<flag:1>Bug: off-by-one error in loop</flag>
+<flag:2>Todo: add input validation</flag>
+<flag:3>Comment: general observation</flag>
+```
+
+### Sidebar
+
+The flag sidebar on the right shows all flags with colored label badges. You can:
+
+- **Click a flag** to scroll to it in the document
+- **Edit** a flag's comment or label inline
+- **Delete** a flag with one click
+- **Collapse** the sidebar to a narrow icon strip (state persists across reloads)
 
 ## Development
 
