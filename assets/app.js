@@ -613,6 +613,11 @@
                 }
             });
             input.addEventListener('blur', function () {
+                var val = input.value.trim();
+                if (val) {
+                    selectedLabel = val;
+                    onSelect(val);
+                }
                 renderPills();
             });
         }
