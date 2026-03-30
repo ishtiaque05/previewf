@@ -12,9 +12,11 @@ fn test_extract_flags_from_flagged_file() {
 
     assert_eq!(flags.len(), 4);
     assert_eq!(flags[0].id, 1);
+    assert_eq!(flags[0].label, "Comment");
     assert_eq!(flags[0].comment, "need to rethink this approach");
     assert_eq!(flags[0].line, 3);
     assert_eq!(flags[1].id, 2);
+    assert_eq!(flags[1].label, "Comment");
     assert_eq!(flags[1].comment, "contradicts section 3");
     assert_eq!(flags[1].line, 5);
 }
@@ -81,6 +83,25 @@ fn test_extract_flags_without_comment_prefix_ignored() {
         0,
         "flag without Comment: prefix should not match"
     );
+}
+
+#[test]
+fn test_extract_flags_parses_label() {
+    let content = "Line with <flag:1>Bug: something broken</flag> here.";
+    let flags = extract_flags(content);
+    assert_eq!(flags.len(), 1);
+    assert_eq!(flags[0].id, 1);
+    assert_eq!(flags[0].label, "Bug");
+    assert_eq!(flags[0].comment, "something broken");
+}
+
+#[test]
+fn test_extract_flags_custom_label() {
+    let content = "Line <flag:1>Perf: slow query</flag> here.";
+    let flags = extract_flags(content);
+    assert_eq!(flags.len(), 1);
+    assert_eq!(flags[0].label, "Perf");
+    assert_eq!(flags[0].comment, "slow query");
 }
 
 // --- next_flag_id ---
@@ -244,12 +265,14 @@ fn test_format_flags_text_with_flags() {
                 id: 1,
                 line: 3,
                 context: "some text".to_string(),
+                label: "Comment".to_string(),
                 comment: "needs rework".to_string(),
             },
             Flag {
                 id: 2,
                 line: 7,
                 context: "other text".to_string(),
+                label: "Comment".to_string(),
                 comment: "contradicts intro".to_string(),
             },
         ],

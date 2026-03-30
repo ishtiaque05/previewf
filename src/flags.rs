@@ -6,13 +6,14 @@ use serde::{Deserialize, Serialize};
 use crate::PreviewError;
 
 pub static FLAG_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"<flag:(\d+)>Comment:\s*(.+?)</flag>").unwrap());
+    LazyLock::new(|| Regex::new(r"<flag:(\d+)>(\w+):\s*(.+?)</flag>").unwrap());
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Flag {
     pub id: u32,
     pub line: usize,
     pub context: String,
+    pub label: String,
     pub comment: String,
 }
 
@@ -44,13 +45,15 @@ pub fn extract_flags(content: &str) -> Vec<Flag> {
                 Ok(id) if id > 0 => id,
                 _ => continue,
             };
-            let comment = cap[2].to_string();
+            let label = cap[2].to_string();
+            let comment = cap[3].to_string();
             let context = FLAG_RE.replace_all(line, "").to_string();
 
             flags.push(Flag {
                 id,
                 line: line_num + 1,
                 context,
+                label,
                 comment,
             });
         }

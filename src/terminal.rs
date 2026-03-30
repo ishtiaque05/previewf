@@ -12,7 +12,7 @@ pub fn render_terminal(content: &str) -> String {
 
 fn prepare_flags_for_terminal(content: &str) -> String {
     FLAG_RE
-        .replace_all(content, "**[FLAG #$1:** $2**]**")
+        .replace_all(content, "**[FLAG #$1:** $3**]**")
         .into_owned()
 }
 

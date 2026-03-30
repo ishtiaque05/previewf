@@ -100,7 +100,7 @@ fn render_flags(html: &str) -> String {
     FLAG_RE
         .replace_all(html, |caps: &regex::Captures| {
             let id = &caps[1];
-            let comment = html::escape(caps[2].trim());
+            let comment = html::escape(caps[3].trim());
             format!(
                 "<span class=\"flag\" data-flag-id=\"{id}\">\
                  <span class=\"flag-marker\">#{id}</span>\
