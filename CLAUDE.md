@@ -4,7 +4,8 @@ A markdown/HTML preview and annotation tool.
 
 ## Flag System
 
-- Flags in `.md` files use `<flag:N>Comment: description</flag>` syntax
+- Flags in `.md` files use `<flag:N>Label: description</flag>` syntax
+- The label is a category: Comment (default), Bug, Todo, Question, Note, Style, or custom
 - Flags are inline — they wrap or follow the text they annotate
 - Flag IDs are auto-incremented per file
 - `previewf flags file.md --json` extracts all flags as structured JSON
@@ -14,15 +15,21 @@ A markdown/HTML preview and annotation tool.
 When asked to "resolve flags" or "address flagged items":
 1. Run `previewf flags <file> --json` or read the file directly
 2. For each flag, address the comment (fix the issue, update the text, etc.)
-3. Remove the `<flag:N>Comment: ...</flag>` tags once resolved
+3. Remove the `<flag:N>Label: ...</flag>` tags once resolved
 4. Verify no flags remain: `previewf flags <file>` should show "No flags found"
 
 ### Flag Format
 
 ```
-<flag:1>Comment: need to rethink this approach</flag>
-<flag:2>Comment: contradicts section 3</flag>
+<flag:1>Bug: off-by-one error in loop</flag>
+<flag:2>Todo: add input validation</flag>
+<flag:3>Comment: need to rethink this approach</flag>
 ```
+
+### Flag Labels
+
+Predefined: Comment, Bug, Todo, Question, Note, Style. Custom single-word labels also supported.
+The label is the prefix before the colon — `\w+` regex (no spaces).
 
 ## Commands
 

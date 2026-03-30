@@ -700,12 +700,19 @@ async fn flags_handler(
 struct FlagRequest {
     comment: String,
     selected_text: String,
+    #[serde(default = "default_label")]
+    label: String,
+}
+
+fn default_label() -> String {
+    "Comment".to_string()
 }
 
 /// Request body for flag comment update.
 #[derive(Deserialize)]
 struct UpdateFlagRequest {
     comment: String,
+    label: Option<String>,
 }
 
 /// `POST /flag/{*filepath}` — inject a flag into a markdown file.
@@ -755,7 +762,7 @@ async fn flag_handler(
         }
     };
 
-    match inject_flag(&content, line, &body.comment) {
+    match inject_flag(&content, line, &body.comment, &body.label) {
         Ok(new_content) => match std::fs::write(&full_path, &new_content) {
             Ok(_) => {
                 // Don't send explicit reload — the file watcher will detect the write
@@ -860,7 +867,7 @@ async fn update_flag_handler(
         Err(_) => return not_found_response(&filepath),
     };
 
-    match update_flag_comment(&content, id, &body.comment) {
+    match update_flag_comment(&content, id, &body.comment, body.label.as_deref()) {
         Ok(new_content) => match std::fs::write(&full_path, &new_content) {
             Ok(_) => (StatusCode::OK, "Flag updated").into_response(),
             Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),

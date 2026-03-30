@@ -6,13 +6,14 @@ use serde::{Deserialize, Serialize};
 use crate::PreviewError;
 
 pub static FLAG_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"<flag:(\d+)>Comment:\s*(.+?)</flag>").unwrap());
+    LazyLock::new(|| Regex::new(r"<flag:(\d+)>(\w+):\s*(.+?)</flag>").unwrap());
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Flag {
     pub id: u32,
     pub line: usize,
     pub context: String,
+    pub label: String,
     pub comment: String,
 }
 
@@ -44,13 +45,15 @@ pub fn extract_flags(content: &str) -> Vec<Flag> {
                 Ok(id) if id > 0 => id,
                 _ => continue,
             };
-            let comment = cap[2].to_string();
+            let label = cap[2].to_string();
+            let comment = cap[3].to_string();
             let context = FLAG_RE.replace_all(line, "").to_string();
 
             flags.push(Flag {
                 id,
                 line: line_num + 1,
                 context,
+                label,
                 comment,
             });
         }
@@ -72,7 +75,12 @@ fn is_code_fence(line: &str) -> bool {
 }
 
 /// Inject a new flag at the given line number (1-indexed).
-pub fn inject_flag(content: &str, line: usize, comment: &str) -> Result<String, PreviewError> {
+pub fn inject_flag(
+    content: &str,
+    line: usize,
+    comment: &str,
+    label: &str,
+) -> Result<String, PreviewError> {
     let lines: Vec<&str> = content.lines().collect();
 
     if line == 0 || line > lines.len() {
@@ -96,7 +104,7 @@ pub fn inject_flag(content: &str, line: usize, comment: &str) -> Result<String, 
 
     let sanitized = sanitize_comment(comment);
     let next_id = next_flag_id(content);
-    let flag_tag = format!(" <flag:{}>Comment: {}</flag>", next_id, sanitized);
+    let flag_tag = format!(" <flag:{next_id}>{label}: {sanitized}</flag>");
 
     let mut result: Vec<String> = lines.iter().map(|l| l.to_string()).collect();
     result[line - 1].push_str(&flag_tag);
@@ -112,7 +120,7 @@ pub fn inject_flag(content: &str, line: usize, comment: &str) -> Result<String, 
 /// Remove a flag by ID from the content.
 /// Returns the content with the flag tag stripped, preserving surrounding text.
 pub fn remove_flag(content: &str, id: u32) -> Result<String, PreviewError> {
-    let target = Regex::new(&format!(r"<flag:{id}>Comment:\s*.+?</flag>")).map_err(|e| {
+    let target = Regex::new(&format!(r"<flag:{id}>\w+:\s*.+?</flag>")).map_err(|e| {
         PreviewError::FlagParse {
             line: 0,
             detail: format!("Invalid flag regex for ID {id}: {e}"),
@@ -148,19 +156,20 @@ pub fn remove_flag(content: &str, id: u32) -> Result<String, PreviewError> {
 
 /// Update the comment of an existing flag by ID.
 /// The new comment is sanitized before insertion.
+/// If `new_label` is `Some`, the label is also updated; otherwise the existing label is preserved.
 pub fn update_flag_comment(
     content: &str,
     id: u32,
     new_comment: &str,
+    new_label: Option<&str>,
 ) -> Result<String, PreviewError> {
-    let target = Regex::new(&format!(r"<flag:{id}>Comment:\s*.+?</flag>")).map_err(|e| {
+    let target = Regex::new(&format!(r"<flag:{id}>(\w+):\s*.+?</flag>")).map_err(|e| {
         PreviewError::FlagParse {
             line: 0,
             detail: format!("Invalid flag regex for ID {id}: {e}"),
         }
     })?;
     let sanitized = sanitize_comment(new_comment);
-    let replacement = format!("<flag:{id}>Comment: {sanitized}</flag>");
     let mut found = false;
 
     let result: Vec<String> = content
@@ -169,7 +178,10 @@ pub fn update_flag_comment(
             if target.is_match(line) {
                 found = true;
                 target
-                    .replace_all(line, regex::NoExpand(replacement.as_str()))
+                    .replace_all(line, |caps: &regex::Captures| {
+                        let label = new_label.unwrap_or(&caps[1]);
+                        format!("<flag:{id}>{label}: {sanitized}</flag>")
+                    })
                     .to_string()
             } else {
                 line.to_string()
@@ -202,8 +214,8 @@ pub fn format_flags_text(report: &FlagReport) -> String {
 
     for flag in &report.flags {
         output.push_str(&format!(
-            "  #{} (line {}): {}\n    Context: {}\n\n",
-            flag.id, flag.line, flag.comment, flag.context
+            "  #{} [{}] (line {}): {}\n    Context: {}\n\n",
+            flag.id, flag.label, flag.line, flag.comment, flag.context
         ));
     }
 

@@ -709,6 +709,107 @@ async fn test_flag_put_empty_comment_returns_400() {
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 }
 
+// --- Flag POST/PUT label tests ---
+
+#[tokio::test]
+async fn test_flag_post_with_label() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let file_path = dir.path().join("test.md");
+    std::fs::write(&file_path, "Hello world.\n").unwrap();
+    let config = ServerBuilder::new()
+        .path(dir.path())
+        .port(0)
+        .live_reload(false)
+        .build()
+        .unwrap();
+    let app = create_router(config);
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/flag/test.md")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "comment": "broken thing",
+                        "selected_text": "Hello world.",
+                        "label": "Bug"
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let content = std::fs::read_to_string(&file_path).unwrap();
+    assert!(content.contains("<flag:1>Bug: broken thing</flag>"));
+}
+
+#[tokio::test]
+async fn test_flag_post_without_label_defaults_to_comment() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let file_path = dir.path().join("test.md");
+    std::fs::write(&file_path, "Hello world.\n").unwrap();
+    let config = ServerBuilder::new()
+        .path(dir.path())
+        .port(0)
+        .live_reload(false)
+        .build()
+        .unwrap();
+    let app = create_router(config);
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/flag/test.md")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "comment": "general note",
+                        "selected_text": "Hello world."
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let content = std::fs::read_to_string(&file_path).unwrap();
+    assert!(content.contains("<flag:1>Comment: general note</flag>"));
+}
+
+#[tokio::test]
+async fn test_flag_put_changes_label() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let file_path = dir.path().join("test.md");
+    std::fs::write(&file_path, "Line <flag:1>Comment: old</flag> here.\n").unwrap();
+    let config = ServerBuilder::new()
+        .path(dir.path())
+        .port(0)
+        .live_reload(false)
+        .build()
+        .unwrap();
+    let app = create_router(config);
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("PUT")
+                .uri("/flag/1/test.md")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({ "comment": "old", "label": "Bug" }).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let content = std::fs::read_to_string(&file_path).unwrap();
+    assert!(content.contains("<flag:1>Bug: old</flag>"));
+}
+
 // --- Flag DELETE/PUT path traversal ---
 
 #[tokio::test]

@@ -12,9 +12,11 @@ fn test_extract_flags_from_flagged_file() {
 
     assert_eq!(flags.len(), 4);
     assert_eq!(flags[0].id, 1);
+    assert_eq!(flags[0].label, "Comment");
     assert_eq!(flags[0].comment, "need to rethink this approach");
     assert_eq!(flags[0].line, 3);
     assert_eq!(flags[1].id, 2);
+    assert_eq!(flags[1].label, "Comment");
     assert_eq!(flags[1].comment, "contradicts section 3");
     assert_eq!(flags[1].line, 5);
 }
@@ -83,6 +85,25 @@ fn test_extract_flags_without_comment_prefix_ignored() {
     );
 }
 
+#[test]
+fn test_extract_flags_parses_label() {
+    let content = "Line with <flag:1>Bug: something broken</flag> here.";
+    let flags = extract_flags(content);
+    assert_eq!(flags.len(), 1);
+    assert_eq!(flags[0].id, 1);
+    assert_eq!(flags[0].label, "Bug");
+    assert_eq!(flags[0].comment, "something broken");
+}
+
+#[test]
+fn test_extract_flags_custom_label() {
+    let content = "Line <flag:1>Perf: slow query</flag> here.";
+    let flags = extract_flags(content);
+    assert_eq!(flags.len(), 1);
+    assert_eq!(flags[0].label, "Perf");
+    assert_eq!(flags[0].comment, "slow query");
+}
+
 // --- next_flag_id ---
 
 #[test]
@@ -111,7 +132,7 @@ fn test_next_flag_id_non_sequential() {
 #[test]
 fn test_inject_flag_into_clean_content() {
     let content = "Line one\nLine two\nLine three\n";
-    let result = inject_flag(content, 2, "needs work").unwrap();
+    let result = inject_flag(content, 2, "needs work", "Comment").unwrap();
     assert!(result.contains("<flag:1>Comment: needs work</flag>"));
     assert!(result.contains("Line two"));
 }
@@ -119,7 +140,7 @@ fn test_inject_flag_into_clean_content() {
 #[test]
 fn test_inject_flag_into_flagged_content() {
     let content = "Line one\n<flag:1>Comment: existing</flag> Line two\nLine three\n";
-    let result = inject_flag(content, 3, "also this").unwrap();
+    let result = inject_flag(content, 3, "also this", "Comment").unwrap();
     assert!(result.contains("<flag:2>Comment: also this</flag>"));
     assert!(result.contains("<flag:1>Comment: existing</flag>"));
 }
@@ -127,21 +148,21 @@ fn test_inject_flag_into_flagged_content() {
 #[test]
 fn test_inject_flag_invalid_line_too_high() {
     let content = "Line one\nLine two\n";
-    let result = inject_flag(content, 5, "bad line");
+    let result = inject_flag(content, 5, "bad line", "Comment");
     assert!(result.is_err());
 }
 
 #[test]
 fn test_inject_flag_invalid_line_zero() {
     let content = "Line one\nLine two\n";
-    let result = inject_flag(content, 0, "bad line");
+    let result = inject_flag(content, 0, "bad line", "Comment");
     assert!(result.is_err());
 }
 
 #[test]
 fn test_inject_flag_preserves_trailing_newline() {
     let content = "Line one\nLine two\n";
-    let result = inject_flag(content, 1, "test").unwrap();
+    let result = inject_flag(content, 1, "test", "Comment").unwrap();
     assert!(
         result.ends_with('\n'),
         "trailing newline should be preserved"
@@ -151,7 +172,7 @@ fn test_inject_flag_preserves_trailing_newline() {
 #[test]
 fn test_inject_flag_no_trailing_newline_when_absent() {
     let content = "Line one\nLine two";
-    let result = inject_flag(content, 1, "test").unwrap();
+    let result = inject_flag(content, 1, "test", "Comment").unwrap();
     assert!(
         !result.ends_with('\n'),
         "should not add trailing newline when original lacks one"
@@ -161,7 +182,7 @@ fn test_inject_flag_no_trailing_newline_when_absent() {
 #[test]
 fn test_inject_flag_sanitizes_closing_tag_in_comment() {
     let content = "Line one\nLine two\n";
-    let result = inject_flag(content, 1, "break </flag> here").unwrap();
+    let result = inject_flag(content, 1, "break </flag> here", "Comment").unwrap();
     assert!(
         !result.contains("break </flag> here"),
         "raw </flag> in comment should be escaped"
@@ -174,7 +195,7 @@ fn test_inject_flag_sanitizes_closing_tag_in_comment() {
 #[test]
 fn test_inject_flag_sanitizes_html_in_comment() {
     let content = "Line one\nLine two\n";
-    let result = inject_flag(content, 1, "<script>alert('xss')</script>").unwrap();
+    let result = inject_flag(content, 1, "<script>alert('xss')</script>", "Comment").unwrap();
     assert!(
         !result.contains("<script>"),
         "HTML tags in comment should be escaped"
@@ -184,7 +205,7 @@ fn test_inject_flag_sanitizes_html_in_comment() {
 #[test]
 fn test_inject_flag_rejects_code_fence_line() {
     let content = "Text before\n```rust\nfn main() {}\n```\nText after\n";
-    let result = inject_flag(content, 2, "bad target");
+    let result = inject_flag(content, 2, "bad target", "Comment");
     assert!(
         result.is_err(),
         "should reject injection into code fence delimiter"
@@ -194,7 +215,7 @@ fn test_inject_flag_rejects_code_fence_line() {
 #[test]
 fn test_inject_flag_rejects_tilde_code_fence() {
     let content = "Text before\n~~~\ncode\n~~~\nText after\n";
-    let result = inject_flag(content, 2, "bad target");
+    let result = inject_flag(content, 2, "bad target", "Comment");
     assert!(
         result.is_err(),
         "should reject injection into ~~~ fence delimiter"
@@ -206,7 +227,7 @@ fn test_inject_flag_rejects_tilde_code_fence() {
 #[test]
 fn test_inject_then_extract_round_trip() {
     let content = "Line one\nLine two\nLine three\n";
-    let injected = inject_flag(content, 2, "review this").unwrap();
+    let injected = inject_flag(content, 2, "review this", "Comment").unwrap();
     let flags = extract_flags(&injected);
     assert_eq!(flags.len(), 1);
     assert_eq!(flags[0].id, 1);
@@ -244,21 +265,23 @@ fn test_format_flags_text_with_flags() {
                 id: 1,
                 line: 3,
                 context: "some text".to_string(),
+                label: "Comment".to_string(),
                 comment: "needs rework".to_string(),
             },
             Flag {
                 id: 2,
                 line: 7,
                 context: "other text".to_string(),
+                label: "Comment".to_string(),
                 comment: "contradicts intro".to_string(),
             },
         ],
     };
     let output = format_flags_text(&report);
     assert!(output.contains("Flags in test.md:"));
-    assert!(output.contains("#1 (line 3): needs rework"));
+    assert!(output.contains("#1 [Comment] (line 3): needs rework"));
     assert!(output.contains("Context: some text"));
-    assert!(output.contains("#2 (line 7): contradicts intro"));
+    assert!(output.contains("#2 [Comment] (line 7): contradicts intro"));
 }
 
 #[test]
@@ -315,7 +338,7 @@ fn test_remove_flag_no_trailing_newline() {
 #[test]
 fn test_update_flag_comment_changes_comment() {
     let content = "Line <flag:1>Comment: old comment</flag> here.\n";
-    let result = update_flag_comment(content, 1, "new comment").unwrap();
+    let result = update_flag_comment(content, 1, "new comment", None).unwrap();
     assert!(result.contains("<flag:1>Comment: new comment</flag>"));
     assert!(!result.contains("old comment"));
 }
@@ -323,7 +346,7 @@ fn test_update_flag_comment_changes_comment() {
 #[test]
 fn test_update_flag_comment_sanitizes_input() {
     let content = "Line <flag:1>Comment: safe</flag> here.\n";
-    let result = update_flag_comment(content, 1, "<script>alert(1)</script>").unwrap();
+    let result = update_flag_comment(content, 1, "<script>alert(1)</script>", None).unwrap();
     assert!(result.contains("&lt;script&gt;"));
     assert!(!result.contains("<script>"));
 }
@@ -331,7 +354,7 @@ fn test_update_flag_comment_sanitizes_input() {
 #[test]
 fn test_update_flag_comment_preserves_other_flags() {
     let content = "A <flag:1>Comment: first</flag> B <flag:2>Comment: second</flag>\n";
-    let result = update_flag_comment(content, 1, "updated").unwrap();
+    let result = update_flag_comment(content, 1, "updated", None).unwrap();
     assert!(result.contains("<flag:1>Comment: updated</flag>"));
     assert!(result.contains("<flag:2>Comment: second</flag>"));
 }
@@ -339,13 +362,55 @@ fn test_update_flag_comment_preserves_other_flags() {
 #[test]
 fn test_update_flag_comment_not_found_returns_error() {
     let content = "No flags.\n";
-    let result = update_flag_comment(content, 99, "anything");
+    let result = update_flag_comment(content, 99, "anything", None);
     assert!(result.is_err());
 }
 
 #[test]
 fn test_update_flag_comment_preserves_trailing_newline() {
     let content = "Line <flag:1>Comment: old</flag> here.\n";
-    let result = update_flag_comment(content, 1, "new").unwrap();
+    let result = update_flag_comment(content, 1, "new", None).unwrap();
     assert!(result.ends_with('\n'));
+}
+
+// --- remove_flag label-aware ---
+
+#[test]
+fn test_remove_flag_with_non_comment_label() {
+    let content = "Line <flag:1>Bug: broken thing</flag> here.\n";
+    let result = remove_flag(content, 1).unwrap();
+    assert!(!result.contains("<flag:1>"));
+    assert!(result.contains("Line"));
+}
+
+// --- update_flag_comment label-aware ---
+
+#[test]
+fn test_update_flag_comment_with_label() {
+    let content = "Line <flag:1>Bug: old text</flag> here.\n";
+    let result = update_flag_comment(content, 1, "new text", None).unwrap();
+    assert!(result.contains("<flag:1>Bug: new text</flag>"));
+}
+
+#[test]
+fn test_update_flag_changes_label() {
+    let content = "Line <flag:1>Comment: some note</flag> here.\n";
+    let result = update_flag_comment(content, 1, "some note", Some("Bug")).unwrap();
+    assert!(result.contains("<flag:1>Bug: some note</flag>"));
+}
+
+// --- inject_flag label ---
+
+#[test]
+fn test_inject_flag_with_label() {
+    let content = "Hello world\nSecond line\n";
+    let result = inject_flag(content, 1, "something broken", "Bug").unwrap();
+    assert!(result.contains("<flag:1>Bug: something broken</flag>"));
+}
+
+#[test]
+fn test_inject_flag_default_comment_label() {
+    let content = "Hello world\n";
+    let result = inject_flag(content, 1, "general note", "Comment").unwrap();
+    assert!(result.contains("<flag:1>Comment: general note</flag>"));
 }
