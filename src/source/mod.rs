@@ -1,3 +1,4 @@
+pub mod docker;
 pub mod local;
 
 use async_trait::async_trait;
