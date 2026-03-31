@@ -1,4 +1,5 @@
 pub mod docker;
+pub mod docker_watcher;
 pub mod error;
 pub mod flags;
 pub mod html;
