@@ -1473,6 +1473,49 @@ img {
     color: #F59E0B;
 }
 
+/* Docker section */
+.docker-section {
+    margin-top: 2rem;
+    padding-top: 1.5rem;
+    border-top: 1px solid var(--border);
+}
+.docker-section-title {
+    font-family: var(--font-heading);
+    font-size: 1.25rem;
+    font-weight: 700;
+    margin-bottom: 1rem;
+    color: var(--heading);
+}
+.docker-entry {
+    border-left: 3px solid var(--accent) !important;
+}
+.docker-icon {
+    font-size: 1.1em;
+}
+.docker-badge {
+    font-size: 0.78em;
+    color: var(--text-muted);
+}
+.docker-refresh {
+    margin-top: 0.75rem;
+    padding: 0.35rem 1rem;
+    font-family: var(--font-sans);
+    font-size: 0.85rem;
+    background: var(--bg-alt);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    cursor: pointer;
+    color: var(--text);
+}
+.docker-refresh:hover {
+    background: var(--border);
+}
+.docker-empty {
+    color: var(--text-muted);
+    font-style: italic;
+    padding: 0.5rem 0;
+}
+
 /* --------------------------------------------------------------------------
    Print styles
    -------------------------------------------------------------------------- */
