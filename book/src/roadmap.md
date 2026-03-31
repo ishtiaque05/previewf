@@ -2,6 +2,22 @@
 
 This chapter lists features that are planned for future development but are explicitly out of scope for the initial release (v0.1.0). They are listed here to document intent and to prevent scope creep during initial development.
 
+## Completed Features
+
+These features have shipped and are available in the current binary.
+
+### Docker Container File Serving
+
+Browse and preview markdown files inside running Docker containers from your host browser.
+
+- `previewf docker ls` — list running containers
+- `previewf docker serve <container> <path>` — serve container files locally
+- Browser-based discovery: the index page shows a Docker Containers section when Docker is available
+- All local routes mirrored under `/docker/:container/` (view, raw, flags, flag creation, WebSocket)
+- Polling-based live reload via `DockerPollWatcher` (inotify cannot observe container filesystems from the host)
+- `--host` flag on `previewf serve` for container-native mode (bind to `0.0.0.0` for port-mapped access)
+- `FileSource` async trait abstraction over local and container filesystems
+
 ## Planned Features
 
 ### CLI Editing Mode

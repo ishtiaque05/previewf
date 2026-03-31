@@ -183,3 +183,33 @@ Wired the three stub CLI subcommands in `src/main.rs` to their actual implementa
 - Task 10 (file watcher integration with server) was already completed as part of the server stack (PR #4) — the `run()` function in `server.rs` spawns a background watcher task when `live_reload` is enabled
 - No new dependencies added — `anyhow::Context` was already available
 - All 53 existing tests continue to pass
+
+---
+
+## PR #13: Docker Container File Serving
+
+**Branch:** `feat/docker-file-serving`
+
+### What was built
+
+- `FileSource` async trait abstraction with `LocalSource` and `DockerSource` implementations
+- Docker CLI module (`docker.rs`) for container discovery and validation
+- `DockerPollWatcher` for polling-based live reload
+- Docker routes under `/docker/:container/` mirroring all local routes
+- Browser-based container discovery on index page (Docker Containers section)
+- `--host` flag on `previewf serve` for container-native mode
+- `docker ls` and `docker serve` CLI subcommands
+
+### Design decisions made during implementation
+
+**FileSource trait with async-trait:** Used the `async-trait` crate for dynamic dispatch (`dyn FileSource`). RPITIT in stable Rust does not support `dyn` traits yet, so `async-trait` is the standard solution.
+
+**Lazy DockerSource caching:** `DockerSource` instances are created on first access and cached per-container in `AppState`. Evicted on error so a restart recovers cleanly.
+
+**Per-container reload channels:** Each container gets its own `broadcast::Sender` so changes in one container do not trigger reloads in another.
+
+### Test coverage
+
+- 10 `LocalSource` tests (path traversal, read/write/list/stat/is_file/is_dir)
+- 5 Docker CLI module tests (container list parsing, name validation)
+- All 22 existing server tests pass unchanged (verifies the refactor)

@@ -13,6 +13,9 @@ previewf serve ./plan.md
 
 # Custom port
 previewf serve ./docs/ --port 8080
+
+# Bind to all interfaces (for Docker container-native mode)
+previewf serve ./docs/ --host 0.0.0.0
 ```
 
 ## Command Syntax
@@ -25,6 +28,7 @@ Arguments:
 
 Options:
   -p, --port <PORT>    Port to listen on [default: 3000]
+      --host <HOST>    Address to bind to [default: 127.0.0.1]
   -h, --help           Print help
 ```
 
@@ -205,6 +209,7 @@ previewf::server::run(config).await?;
 |-------|------|---------|-------------|
 | `path` | `PathBuf` | (required) | File or directory to serve |
 | `port` | `u16` | `3000` | Port to listen on |
+| `host` | `String` | `"127.0.0.1"` | Address to bind to |
 | `live_reload` | `bool` | `true` | Enable WebSocket live reload |
 
 ## Port Selection
@@ -215,7 +220,7 @@ The default port is 3000. If port 3000 is in use, specify a different port:
 previewf serve ./docs/ --port 8080
 ```
 
-The server binds to `0.0.0.0:<port>`, which means it is accessible from other devices on the same network. For a personal tool, this is convenient (you can preview on your phone) but be aware of the security implications if you are on an untrusted network.
+By default the server binds to `127.0.0.1:<port>`, which means it is only accessible from the local machine. Use `--host 0.0.0.0` to bind to all interfaces if you need to access the server from another device on the same network, but be aware of the security implications on untrusted networks.
 
 ## Live Reload Behavior
 
@@ -228,3 +233,22 @@ When live reload is enabled (the default), the server:
 The file watcher uses the `notify` crate with platform-native backends (FSEvents on macOS, inotify on Linux). Changes are typically detected within 100ms.
 
 For more details on the live reload mechanism, see the [Live Reload scenario](../scenarios/live-reload.md).
+
+## Container-Native Mode
+
+To run previewf inside a Docker container and access it from your host browser, bind to all interfaces:
+
+```bash
+previewf serve ./docs --host 0.0.0.0 --port 3000
+```
+
+In your `docker run` command, map the port:
+
+```bash
+docker run -p 3000:3000 -v $(pwd)/docs:/docs my-image \
+  previewf serve /docs --host 0.0.0.0
+```
+
+Then open `http://localhost:3000` on your host. The `--host 0.0.0.0` flag is required because the default `127.0.0.1` binding is unreachable from outside the container.
+
+For previewing files in a running container without rebuilding the image, use `previewf docker serve` instead. See the [Docker Containers](docker.md) page.
