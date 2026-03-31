@@ -6,14 +6,19 @@ previewf is structured as a single Rust crate with six modules, each responsible
 
 ```
 src/
-  main.rs          CLI entry point (clap parsing + subcommand dispatch)
-  lib.rs           Public API re-exports
-  error.rs         PreviewError enum (thiserror)
-  flags.rs         Flag model, parsing, injection, extraction, formatting
-  markdown.rs      Markdown-to-HTML (comrak + syntect + flag post-processing)
-  terminal.rs      Markdown-to-terminal (termimad + flag formatting)
-  server.rs        HTTP server (axum), routes, WebSocket, ServerBuilder
-  watcher.rs       File watching (notify) with broadcast channel
+  main.rs            CLI entry point (clap parsing + subcommand dispatch)
+  lib.rs             Public API re-exports
+  error.rs           PreviewError enum (thiserror)
+  flags.rs           Flag model, parsing, injection, extraction, formatting
+  markdown.rs        Markdown-to-HTML (comrak + syntect + flag post-processing)
+  terminal.rs        Markdown-to-terminal (termimad + flag formatting)
+  server.rs          HTTP server (axum), routes, WebSocket, ServerBuilder
+  watcher.rs         File watching (notify) with broadcast channel
+  source/mod.rs      FileSource trait, DirEntry, FileMeta types
+  source/local.rs    LocalSource (wraps std::fs)
+  source/docker.rs   DockerSource (wraps docker exec)
+  docker.rs          Container discovery, validation, CLI wrappers
+  docker_watcher.rs  DockerPollWatcher (polling-based change detection)
 ```
 
 ## Module Responsibilities
@@ -120,29 +125,82 @@ Monitors files/directories for changes and broadcasts notifications:
 **Depends on:** `error.rs`
 **Depended on by:** `server.rs` (for live reload integration)
 
+### `source/mod.rs` -- FileSource Abstraction
+
+Defines the `FileSource` async trait and shared types:
+
+- `FileSource` trait -- `read_file`, `list_dir`, `stat`, `is_file`, `is_dir`
+- `DirEntry` struct -- name, path, is_dir, size
+- `FileMeta` struct -- path, modified time, size
+
+**Depends on:** `error.rs`
+**Depended on by:** `source/local.rs`, `source/docker.rs`, `server.rs`
+
+### `source/local.rs` -- Local Filesystem Source
+
+`LocalSource` implements `FileSource` over `std::fs`. A thin wrapper that translates `std::io::Error` into `PreviewError`.
+
+**Depends on:** `source/mod.rs`, `error.rs`
+**Depended on by:** `server.rs` (used as the default source for local serves)
+
+### `source/docker.rs` -- Docker Container Source
+
+`DockerSource` implements `FileSource` by shelling out to `docker exec`:
+
+- `read_file` -- runs `docker exec <container> cat <path>`
+- `list_dir` -- runs `docker exec <container> ls -la <path>`
+- `stat` -- runs `docker exec <container> stat <path>`
+
+**Depends on:** `source/mod.rs`, `docker.rs`, `error.rs`
+**Depended on by:** `server.rs` (created on demand per container, cached in `AppState`)
+
+### `docker.rs` -- Container Discovery and CLI Wrappers
+
+Contains the Docker CLI interface for the host side:
+
+- `list_containers() -> Result<Vec<ContainerInfo>>` -- runs `docker ps --format json`
+- `validate_container_name(name)` -- regex check against `[a-zA-Z0-9_.-]+`
+- `ContainerInfo` struct -- name, image, status
+
+**Depends on:** `error.rs`
+**Depended on by:** `source/docker.rs`, `server.rs`, `main.rs`
+
+### `docker_watcher.rs` -- Docker Poll Watcher
+
+`DockerPollWatcher` polls container file modification times on a configurable interval:
+
+- `DockerPollWatcher::new(container, path, interval) -> (Watcher, Receiver)`
+- `DockerPollWatcher::start() -> Result<()>` -- spawns the polling task
+- Suspends automatically when no WebSocket clients hold a receiver
+
+**Depends on:** `docker.rs`, `error.rs`
+**Depended on by:** `server.rs` (created per container, one per active view session)
+
 ## Dependency Graph
 
 ```
-                    main.rs
-                   /   |   \
-                  /    |    \
-                 v     v     v
-           server.rs  terminal.rs  flags.rs
-           /    \                      |
-          v      v                     v
-    markdown.rs  watcher.rs        error.rs
-         |           |
-         v           v
-       error.rs    error.rs
+                         main.rs
+                    /    |    |    \
+                   /     |    |     \
+                  v      v    v      v
+          server.rs  terminal.rs  flags.rs  docker.rs
+          / | \ \                      |        |
+         v  v  v  v                   v        v
+ markdown.rs  watcher.rs  source/   error.rs  error.rs
+              docker_watcher.rs
+                  |
+                  v
+             source/docker.rs --> docker.rs
+             source/local.rs  --> error.rs
 ```
 
 Key observations:
 
 - `error.rs` is at the bottom of the dependency graph -- everything depends on it
 - `main.rs` is at the top -- it depends on everything but nothing depends on it
-- `server.rs` is the most connected module, depending on `flags.rs`, `markdown.rs`, `watcher.rs`, and `error.rs`
-- `terminal.rs` is isolated -- it has no internal dependencies (only external crate dependencies)
-- `markdown.rs` has no internal dependencies either (it uses comrak and syntect, not `flags.rs`)
+- `server.rs` is the most connected module -- it now also depends on `source/`, `docker.rs`, and `docker_watcher.rs`
+- `source/mod.rs` defines the abstraction boundary; `source/local.rs` and `source/docker.rs` are the only modules that know about actual I/O backends
+- `docker.rs` is shared between `source/docker.rs` (file reads) and `server.rs` (container discovery for the index page)
 
 ## Data Flow Overview
 
@@ -216,6 +274,41 @@ FlagReport { file, flags }
     v
 serde_json::to_string_pretty  -->  JSON string  -->  stdout
 ```
+
+### Flow 4: Docker Container Preview
+
+```
+Browser GET /docker/my-app/view/docs/README.md
+    |
+    v
+axum router extracts container="my-app", filepath="docs/README.md"
+    |
+    v
+validate_container_name("my-app")  -->  ok
+    |
+    v
+normalize_path("docs/README.md")   -->  check for .. traversal
+    |
+    v
+get_docker_source("my-app")  -->  look up or create DockerSource in AppState
+    |
+    v
+DockerSource::read_file("/docs/README.md")
+    |
+    v
+docker exec my-app cat /docs/README.md  -->  raw markdown bytes
+    |
+    v
+render_html(content)  -->  HTML with highlights and flag spans
+    |
+    v
+document.html template  -->  substitute {{title}}, {{filepath}}, {{content}}
+    |
+    v
+axum response  -->  browser renders the page
+```
+
+Live reload for this flow uses `DockerPollWatcher`. The watcher runs a background task that periodically calls `docker exec my-app stat /docs/README.md` and broadcasts a reload notification when the modification time changes.
 
 ## The Assets System
 

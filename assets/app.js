@@ -918,3 +918,75 @@
     });
 
 })();
+
+// --- Docker container discovery ---
+(function() {
+    var section = document.getElementById('docker-section');
+    var list = document.getElementById('docker-list');
+    var refreshBtn = document.getElementById('docker-refresh');
+
+    if (!section || !list) return;
+
+    function clearChildren(el) {
+        while (el.firstChild) el.removeChild(el.firstChild);
+    }
+
+    function renderContainers(containers) {
+        clearChildren(list);
+        if (containers.length === 0) {
+            var empty = document.createElement('p');
+            empty.className = 'docker-empty';
+            empty.textContent = 'No running containers found.';
+            list.appendChild(empty);
+            return;
+        }
+        containers.forEach(function(c) {
+            var a = document.createElement('a');
+            a.className = 'file-entry docker-entry';
+            a.href = '/docker/' + encodeURIComponent(c.name);
+
+            var nameGroup = document.createElement('span');
+            nameGroup.className = 'file-entry-name-group';
+
+            var icon = document.createElement('span');
+            icon.className = 'file-entry-icon docker-icon';
+            icon.textContent = '\uD83D\uDC33';
+
+            var name = document.createElement('span');
+            name.className = 'file-entry-name';
+            name.textContent = c.name;
+
+            nameGroup.appendChild(icon);
+            nameGroup.appendChild(name);
+
+            var badge = document.createElement('span');
+            badge.className = 'file-entry-badge docker-badge';
+            badge.textContent = c.image + ' \u00B7 ' + c.status;
+
+            a.appendChild(nameGroup);
+            a.appendChild(badge);
+            list.appendChild(a);
+        });
+    }
+
+    function fetchContainers() {
+        fetch('/api/docker/containers')
+            .then(function(r) {
+                if (r.ok) return r.json();
+                throw new Error('Docker not available');
+            })
+            .then(function(data) {
+                section.style.display = '';
+                renderContainers(data);
+            })
+            .catch(function() {
+                section.style.display = 'none';
+            });
+    }
+
+    if (refreshBtn) {
+        refreshBtn.addEventListener('click', fetchContainers);
+    }
+
+    fetchContainers();
+})();

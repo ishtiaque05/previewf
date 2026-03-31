@@ -288,3 +288,77 @@ The format must work with comrak's `unsafe_` HTML mode. When comrak sees `<flag:
 The `Comment:` prefix inside the tag serves as a human-readable label and a regex anchor. Without it, the regex would need to be more permissive, potentially matching unrelated HTML-like content.
 
 The numeric ID after `flag:` enables referencing specific flags ("look at flag 3") and ordering them in the sidebar. The closing `</flag>` tag provides an unambiguous boundary for the regex.
+
+## Why a FileSource Trait
+
+### The Decision
+
+Introduce a `FileSource` async trait with `LocalSource` and `DockerSource` implementations, rather than having the server call `std::fs` directly and adding special cases for Docker.
+
+### The Reasoning
+
+**Clean abstraction.** All route handlers that used to call `std::fs::read_to_string` now call `source.read_file()`. The handler does not know or care whether the source is the local filesystem or a Docker container. Adding a third source (an S3 bucket, an SSH remote) requires only a new `FileSource` implementor, not changes to any handler.
+
+**Testability.** A mock `FileSource` can be injected in unit tests without touching the real filesystem. The 22 existing server tests pass unchanged because `LocalSource` is a thin wrapper around `std::fs` with identical behavior.
+
+**The right boundary.** Filesystems are an I/O concern. Making the I/O boundary explicit as a trait is idiomatic Rust — it is the same pattern as `std::io::Read` and `std::io::Write`.
+
+### Alternatives Considered
+
+| Approach | How it works | Why we rejected it |
+|----------|-------------|-------------------|
+| Temp-sync | `docker cp` files to a temp dir, serve from there | Stale copies, extra disk I/O, cleanup complexity |
+| FUSE mount | Mount container FS via FUSE | Requires root or FUSE kernel module, non-trivial setup |
+| Direct branching | `if is_docker { ... } else { ... }` in every handler | Duplicates logic, untestable, unextensible |
+
+### The Trade-offs
+
+**async-trait crate.** The `FileSource` trait uses async methods, which requires the `async-trait` crate for dynamic dispatch via `dyn FileSource`. RPITIT (Return Position `impl Trait` in Traits) in stable Rust does not yet support `dyn` dispatch. This adds a small proc-macro overhead but is the standard solution in the Rust ecosystem.
+
+## Why Docker CLI over Docker Engine API
+
+### The Decision
+
+Shell out to `docker exec` via `std::process::Command` rather than talking directly to the Docker Engine API at `/var/run/docker.sock`.
+
+### The Reasoning
+
+**Simplicity.** The Docker CLI is available wherever Docker is installed. No extra crate dependencies, no socket path discovery, no JSON API surface to learn.
+
+**No extra crates.** Talking to the Docker Engine API requires an HTTP client that can speak over a Unix socket, and either a handwritten API client or a third-party crate (bollard, shiplift). Either way adds build time and maintenance burden for a handful of operations.
+
+**Universal.** `docker exec` works identically with Docker Desktop, Docker CE, Podman with the Docker CLI shim, and remote Docker contexts. The Engine API URL and authentication varies across these setups.
+
+**Negligible overhead.** Each `docker exec` process spawn costs a few milliseconds. For a personal tool previewing one file at a time, this is undetectable.
+
+### The Trade-offs
+
+**Process spawn cost.** Spawning a child process for every file read is heavier than a socket call. For bulk operations this would matter; for interactive previewing it does not.
+
+**No streaming.** `docker exec cat` reads the entire file into memory before the process exits. This is fine for documentation files (typically under 1MB) but would be inappropriate for large binary files.
+
+**Error parsing.** Exit codes and stderr from `docker exec` must be interpreted to produce useful `PreviewError` variants. Socket API responses have structured error payloads. We accept the minor added complexity.
+
+## Why Polling over inotify for Docker
+
+### The Decision
+
+Use a polling watcher (`DockerPollWatcher`) for container file change detection rather than extending the existing `notify`-based file watcher.
+
+### The Reasoning
+
+**Host-level watchers cannot see container files.** inotify, FSEvents, and kqueue watch file descriptors opened on the host. Container filesystems (overlayfs layers) are not directly visible to the host at a path you can watch. There is no reliable way to `inotify_add_watch` a path inside a container overlay.
+
+**Polling via `docker exec stat` is universal.** It requires nothing from the container — no inotify, no bind mount, no special privilege. Any container running any OS supports it.
+
+**Polling interval is configurable.** The default 1000ms interval is imperceptible for human-driven editing. Users who want faster feedback can set `--poll-interval 200`.
+
+**Only actively viewed files are polled.** The `DockerPollWatcher` suspends polling when no WebSocket clients are connected. This means zero overhead when nobody is looking at a file.
+
+### Alternatives Considered
+
+| Approach | How it works | Why we rejected it |
+|----------|-------------|-------------------|
+| Bind mount + inotify | Mount container path as a host volume, watch with notify | Requires container restart or external setup |
+| `docker events` | Subscribe to Docker daemon events | Reports container lifecycle events, not file changes |
+| Inotify inside container | Run inotifywait inside the container | Requires inotify-tools installed, extra exec overhead |
