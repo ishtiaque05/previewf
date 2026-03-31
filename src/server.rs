@@ -14,9 +14,11 @@ use rust_embed::Embed;
 use serde::{Deserialize, Serialize};
 use tokio::sync::{broadcast, Mutex};
 
+use crate::docker::{self, validate_container_name};
 use crate::flags::{extract_flags, inject_flag, remove_flag, update_flag_comment, FlagReport};
 use crate::html;
 use crate::markdown::render_html;
+use crate::source::docker::DockerSource;
 use crate::source::local::LocalSource;
 use crate::source::{EntryType, FileSource};
 use crate::PreviewError;
@@ -127,8 +129,9 @@ struct AppState {
     source: Arc<dyn FileSource>,
     reload_tx: broadcast::Sender<()>,
     file_locks: Arc<Mutex<HashMap<String, Arc<Mutex<()>>>>>,
-    #[allow(dead_code)]
     docker_available: bool,
+    docker_sources: Arc<Mutex<HashMap<String, Arc<DockerSource>>>>,
+    docker_reload_txs: Arc<Mutex<HashMap<String, broadcast::Sender<()>>>>,
 }
 
 // ---------------------------------------------------------------------------
@@ -181,6 +184,8 @@ fn create_router_with_reload(config: ServerConfig, reload_tx: broadcast::Sender<
         reload_tx,
         file_locks: Arc::new(Mutex::new(HashMap::new())),
         docker_available,
+        docker_sources: Arc::new(Mutex::new(HashMap::new())),
+        docker_reload_txs: Arc::new(Mutex::new(HashMap::new())),
     };
 
     Router::new()
@@ -197,6 +202,27 @@ fn create_router_with_reload(config: ServerConfig, reload_tx: broadcast::Sender<
         )
         .route("/api/tree", get(tree_handler))
         .route("/ws", get(ws_handler))
+        // Docker routes
+        .route("/api/docker/containers", get(docker_containers_handler))
+        .route("/docker/{container}", get(docker_index_handler))
+        .route(
+            "/docker/{container}/browse/{*dirpath}",
+            get(docker_browse_handler),
+        )
+        .route(
+            "/docker/{container}/view/{*filepath}",
+            get(docker_view_handler),
+        )
+        .route(
+            "/docker/{container}/flags/{*filepath}",
+            get(docker_flags_handler),
+        )
+        .route(
+            "/docker/{container}/flag/{*filepath}",
+            post(docker_flag_handler),
+        )
+        .route("/docker/{container}/api/tree", get(docker_tree_handler))
+        .route("/docker/{container}/ws", get(docker_ws_handler))
         .route("/assets/{*filepath}", get(asset_handler))
         .with_state(state)
         .layer(middleware::from_fn(security_headers))
@@ -1041,6 +1067,457 @@ fn build_tree_async<'a>(
         dir_nodes.extend(file_nodes);
         dir_nodes
     })
+}
+
+// ---------------------------------------------------------------------------
+// Docker routes
+// ---------------------------------------------------------------------------
+
+/// Look up (or lazily create) a [`DockerSource`] for the given container.
+async fn get_docker_source(
+    state: &AppState,
+    container: &str,
+) -> Result<Arc<DockerSource>, Response> {
+    if !state.docker_available {
+        return Err((StatusCode::SERVICE_UNAVAILABLE, "Docker not available").into_response());
+    }
+    if let Err(e) = validate_container_name(container) {
+        return Err((StatusCode::BAD_REQUEST, e.to_string()).into_response());
+    }
+    let mut sources = state.docker_sources.lock().await;
+    if let Some(source) = sources.get(container) {
+        return Ok(Arc::clone(source));
+    }
+    let source = Arc::new(
+        DockerSource::new(container.to_string(), "/".to_string())
+            .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()).into_response())?,
+    );
+    sources.insert(container.to_string(), Arc::clone(&source));
+    Ok(source)
+}
+
+/// `GET /api/docker/containers` — list running Docker containers as JSON.
+async fn docker_containers_handler(State(state): State<AppState>) -> Response {
+    if !state.docker_available {
+        return (StatusCode::SERVICE_UNAVAILABLE, "Docker not available").into_response();
+    }
+    match docker::list_containers().await {
+        Ok(containers) => match serde_json::to_string(&containers) {
+            Ok(json) => (
+                StatusCode::OK,
+                [(header::CONTENT_TYPE, "application/json")],
+                json,
+            )
+                .into_response(),
+            Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        },
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+/// `GET /docker/{container}` — root listing for a container.
+async fn docker_index_handler(
+    State(state): State<AppState>,
+    AxumPath(container): AxumPath<String>,
+) -> Response {
+    docker_listing_response(&state, &container, "").await
+}
+
+/// `GET /docker/{container}/browse/{*dirpath}` — browse into a container subdirectory.
+async fn docker_browse_handler(
+    State(state): State<AppState>,
+    AxumPath((container, dirpath)): AxumPath<(String, String)>,
+) -> Response {
+    docker_listing_response(&state, &container, &dirpath).await
+}
+
+/// Shared listing logic for Docker container browsing.
+async fn docker_listing_response(state: &AppState, container: &str, subpath: &str) -> Response {
+    let source = match get_docker_source(state, container).await {
+        Ok(s) => s,
+        Err(e) => return e,
+    };
+
+    // Validate that the subdirectory exists
+    if !subpath.is_empty() && !source.is_dir(subpath).await {
+        return not_found_response(subpath);
+    }
+
+    let breadcrumb_html = build_docker_breadcrumbs(container, subpath);
+
+    let mut dirs: Vec<String> = Vec::new();
+    let mut md_files: Vec<(String, usize)> = Vec::new();
+    let mut json_files: Vec<String> = Vec::new();
+    let mut html_files: Vec<String> = Vec::new();
+
+    if let Ok(entries) = source.list_dir(subpath).await {
+        for entry in entries {
+            let name = entry.name;
+            match entry.entry_type {
+                EntryType::Directory => {
+                    dirs.push(name);
+                }
+                EntryType::File => {
+                    if is_markdown(&name) {
+                        let file_path = if subpath.is_empty() {
+                            name.clone()
+                        } else {
+                            format!("{}/{}", subpath.trim_end_matches('/'), name)
+                        };
+                        let content = source.read_file(&file_path).await.unwrap_or_default();
+                        let flag_count = extract_flags(&content).len();
+                        md_files.push((name, flag_count));
+                    } else if is_json(&name) {
+                        json_files.push(name);
+                    } else if name.ends_with(".html") || name.ends_with(".htm") {
+                        html_files.push(name);
+                    }
+                }
+            }
+        }
+    }
+
+    dirs.sort_by_key(|a| a.to_lowercase());
+    md_files.sort_by_key(|a| a.0.to_lowercase());
+    json_files.sort_by_key(|a| a.to_lowercase());
+    html_files.sort_unstable();
+
+    let safe_container = html::escape(container);
+
+    let prefix = if subpath.is_empty() {
+        String::new()
+    } else {
+        format!("{}/", subpath.trim_end_matches('/'))
+    };
+
+    let mut file_entries_parts: Vec<String> = Vec::new();
+
+    for name in &dirs {
+        let safe_name = html::escape(name);
+        let browse_path = html::escape(&format!("{}{}", prefix, name));
+        file_entries_parts.push(format!(
+            r#"<a class="file-entry file-entry-dir" href="/docker/{safe_container}/browse/{browse_path}"><span class="file-entry-name-group"><span class="file-entry-icon dir-icon">&#128193;</span><span class="file-entry-name">{safe_name}/</span></span><span class="file-entry-badge dir-badge">folder</span></a>"#,
+        ));
+    }
+
+    for (name, flag_count) in &md_files {
+        let safe_name = html::escape(name);
+        let view_path = html::escape(&format!("{}{}", prefix, name));
+        let badge = if *flag_count > 0 {
+            format!(
+                r#"<span class="file-entry-badge has-flags">{} flag{}</span>"#,
+                flag_count,
+                if *flag_count == 1 { "" } else { "s" }
+            )
+        } else {
+            r#"<span class="file-entry-badge">&mdash;</span>"#.to_string()
+        };
+        file_entries_parts.push(format!(
+            r#"<a class="file-entry" href="/docker/{safe_container}/view/{view_path}"><span class="file-entry-name-group"><span class="file-entry-icon md-icon">&#9670;</span><span class="file-entry-name">{safe_name}</span></span>{badge}</a>"#,
+        ));
+    }
+
+    for name in &json_files {
+        let safe_name = html::escape(name);
+        let view_path = html::escape(&format!("{}{}", prefix, name));
+        file_entries_parts.push(format!(
+            r#"<a class="file-entry" href="/docker/{safe_container}/view/{view_path}"><span class="file-entry-name-group"><span class="file-entry-icon json-icon">&#123;&#125;</span><span class="file-entry-name">{safe_name}</span></span><span class="file-entry-badge json-badge">json</span></a>"#,
+        ));
+    }
+
+    for name in &html_files {
+        let safe_name = html::escape(name);
+        let view_path = html::escape(&format!("{}{}", prefix, name));
+        file_entries_parts.push(format!(
+            r#"<a class="file-entry" href="/docker/{safe_container}/view/{view_path}"><span class="file-entry-name-group"><span class="file-entry-icon html-icon">&#9671;</span><span class="file-entry-name">{safe_name}</span></span><span class="file-entry-badge html-badge">html</span></a>"#,
+        ));
+    }
+
+    let file_entries = file_entries_parts.join("\n");
+    let summary = format!(
+        "{} folder{} &middot; {} markdown &middot; {} json &middot; {} html",
+        dirs.len(),
+        if dirs.len() == 1 { "" } else { "s" },
+        md_files.len(),
+        json_files.len(),
+        html_files.len(),
+    );
+
+    let dir_display = if subpath.is_empty() {
+        source.display_root()
+    } else {
+        format!("{}/{}", source.display_root(), subpath)
+    };
+
+    let template = Assets::get("index.html")
+        .map(|f| String::from_utf8_lossy(&f.data).into_owned())
+        .unwrap_or_else(|| "<html><body>Template missing</body></html>".to_string());
+
+    let page_html = template
+        .replace("{{directory}}", &html::escape(&dir_display))
+        .replace("{{breadcrumbs}}", &breadcrumb_html)
+        .replace("{{file_entries}}", &file_entries)
+        .replace("{{summary}}", &summary);
+
+    Html(page_html).into_response()
+}
+
+/// Build breadcrumb HTML for a Docker container path.
+fn build_docker_breadcrumbs(container: &str, path: &str) -> String {
+    let safe_container = html::escape(container);
+    let mut parts = Vec::new();
+    parts.push(r#"<a class="breadcrumb-link" href="/">root</a>"#.to_string());
+    parts.push(format!(
+        r#"<a class="breadcrumb-link" href="/docker/{safe_container}">&#128051; {safe_container}</a>"#,
+    ));
+
+    let segments: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
+    let mut accumulated = String::new();
+    for (i, seg) in segments.iter().enumerate() {
+        if !accumulated.is_empty() {
+            accumulated.push('/');
+        }
+        accumulated.push_str(seg);
+        let safe_seg = html::escape(seg);
+        if i == segments.len() - 1 {
+            parts.push(format!(
+                r#"<span class="breadcrumb-current">{safe_seg}</span>"#
+            ));
+        } else {
+            let safe_path = html::escape(&accumulated);
+            parts.push(format!(
+                r#"<a class="breadcrumb-link" href="/docker/{safe_container}/browse/{safe_path}">{safe_seg}</a>"#
+            ));
+        }
+    }
+
+    format!(
+        r#"<nav class="breadcrumbs">{}</nav>"#,
+        parts.join(r#"<span class="breadcrumb-sep">/</span>"#)
+    )
+}
+
+/// `GET /docker/{container}/view/{*filepath}` — render a file from a Docker container.
+async fn docker_view_handler(
+    State(state): State<AppState>,
+    AxumPath((container, filepath)): AxumPath<(String, String)>,
+) -> Response {
+    let source = match get_docker_source(&state, &container).await {
+        Ok(s) => s,
+        Err(e) => return e,
+    };
+
+    let content = match source.read_file(&filepath).await {
+        Ok(c) => c,
+        Err(_) => return not_found_response(&filepath),
+    };
+
+    let rendered = if is_markdown(&filepath) {
+        render_html(&content)
+    } else if is_json(&filepath) {
+        render_json_html(&content)
+    } else {
+        return (StatusCode::BAD_REQUEST, "Unsupported file type").into_response();
+    };
+
+    let breadcrumb_html = build_docker_breadcrumbs(&container, &filepath);
+
+    let template = Assets::get("document.html")
+        .map(|f| String::from_utf8_lossy(&f.data).into_owned())
+        .unwrap_or_else(|| "<html><body>{{content}}</body></html>".to_string());
+
+    let title = filepath.rsplit('/').next().unwrap_or(&filepath).to_string();
+
+    let page_html = template
+        .replace("{{title}}", &html::escape(&title))
+        .replace("{{breadcrumbs}}", &breadcrumb_html)
+        .replace("{{content}}", &rendered);
+
+    Html(page_html).into_response()
+}
+
+/// `GET /docker/{container}/flags/{*filepath}` — return flags as JSON for a Docker file.
+async fn docker_flags_handler(
+    State(state): State<AppState>,
+    AxumPath((container, filepath)): AxumPath<(String, String)>,
+) -> Response {
+    let source = match get_docker_source(&state, &container).await {
+        Ok(s) => s,
+        Err(e) => return e,
+    };
+
+    let content = match source.read_file(&filepath).await {
+        Ok(c) => c,
+        Err(_) => return not_found_response(&filepath),
+    };
+
+    let flags = extract_flags(&content);
+    let report = FlagReport {
+        file: filepath,
+        flags,
+    };
+
+    match serde_json::to_string(&report) {
+        Ok(json) => (
+            StatusCode::OK,
+            [(header::CONTENT_TYPE, "application/json")],
+            json,
+        )
+            .into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+/// `POST /docker/{container}/flag/{*filepath}` — inject a flag into a Docker container file.
+async fn docker_flag_handler(
+    State(state): State<AppState>,
+    AxumPath((container, filepath)): AxumPath<(String, String)>,
+    axum::Json(body): axum::Json<FlagRequest>,
+) -> Response {
+    let source = match get_docker_source(&state, &container).await {
+        Ok(s) => s,
+        Err(e) => return e,
+    };
+
+    if !is_markdown(&filepath) {
+        return (
+            StatusCode::BAD_REQUEST,
+            "Flags can only be added to markdown files",
+        )
+            .into_response();
+    }
+
+    // Use docker-namespaced lock key to avoid collisions with local file locks
+    let lock_key = format!("docker:{}:{}", container, filepath);
+    let file_lock = {
+        let mut locks = state.file_locks.lock().await;
+        locks
+            .entry(lock_key)
+            .or_insert_with(|| Arc::new(Mutex::new(())))
+            .clone()
+    };
+    let _guard = file_lock.lock().await;
+
+    let content = match source.read_file(&filepath).await {
+        Ok(c) => c,
+        Err(_) => return not_found_response(&filepath),
+    };
+
+    let line = content
+        .lines()
+        .enumerate()
+        .find(|(_, l)| l.contains(&body.selected_text))
+        .map(|(i, _)| i + 1);
+
+    let line = match line {
+        Some(l) => l,
+        None => {
+            return (StatusCode::BAD_REQUEST, "Selected text not found in file").into_response()
+        }
+    };
+
+    match inject_flag(&content, line, &body.comment, &body.label) {
+        Ok(new_content) => match source.write_file(&filepath, &new_content).await {
+            Ok(_) => (StatusCode::OK, "Flag injected").into_response(),
+            Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        },
+        Err(e) => (StatusCode::BAD_REQUEST, e.to_string()).into_response(),
+    }
+}
+
+/// `GET /docker/{container}/api/tree` — return the directory tree for a Docker container.
+async fn docker_tree_handler(
+    State(state): State<AppState>,
+    AxumPath(container): AxumPath<String>,
+) -> Response {
+    let source = match get_docker_source(&state, &container).await {
+        Ok(s) => s,
+        Err(e) => return e,
+    };
+
+    let tree = build_tree_async(&*source as &dyn FileSource, "", 0).await;
+
+    match serde_json::to_string(&tree) {
+        Ok(json) => (
+            StatusCode::OK,
+            [(header::CONTENT_TYPE, "application/json")],
+            json,
+        )
+            .into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+/// `GET /docker/{container}/ws` — per-container WebSocket reload channel.
+async fn docker_ws_handler(
+    ws: WebSocketUpgrade,
+    State(state): State<AppState>,
+    AxumPath(container): AxumPath<String>,
+) -> Response {
+    let reload_tx = {
+        let mut txs = state.docker_reload_txs.lock().await;
+        txs.entry(container.clone())
+            .or_insert_with(|| broadcast::channel::<()>(16).0)
+            .clone()
+    };
+    let rx = reload_tx.subscribe();
+    ws.on_upgrade(move |socket| handle_docker_ws(socket, rx))
+}
+
+async fn handle_docker_ws(mut socket: WebSocket, mut rx: broadcast::Receiver<()>) {
+    loop {
+        tokio::select! {
+            result = rx.recv() => {
+                match result {
+                    Ok(()) => {
+                        if socket.send(Message::Text("reload".into())).await.is_err() {
+                            break;
+                        }
+                    }
+                    Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(_) => break,
+                }
+            }
+            msg = socket.recv() => {
+                match msg {
+                    Some(Ok(Message::Close(_))) | None => break,
+                    Some(Err(_)) => break,
+                    _ => {}
+                }
+            }
+        }
+    }
+}
+
+/// Create a router for `previewf docker serve` that uses a [`DockerSource`] as
+/// the primary source.
+pub fn create_docker_router(
+    config: ServerConfig,
+    source: Arc<DockerSource>,
+    reload_tx: broadcast::Sender<()>,
+) -> Router {
+    let state = AppState {
+        config,
+        source: source as Arc<dyn FileSource>,
+        reload_tx,
+        file_locks: Arc::new(Mutex::new(HashMap::new())),
+        docker_available: true,
+        docker_sources: Arc::new(Mutex::new(HashMap::new())),
+        docker_reload_txs: Arc::new(Mutex::new(HashMap::new())),
+    };
+
+    Router::new()
+        .route("/", get(index_handler))
+        .route("/browse/{*dirpath}", get(browse_handler))
+        .route("/view/{*filepath}", get(view_handler))
+        .route("/raw/{*filepath}", get(raw_handler))
+        .route("/flags/{*filepath}", get(flags_handler))
+        .route("/flag/{*filepath}", post(flag_handler))
+        .route("/api/tree", get(tree_handler))
+        .route("/ws", get(ws_handler))
+        .route("/assets/{*filepath}", get(asset_handler))
+        .with_state(state)
+        .layer(middleware::from_fn(security_headers))
 }
 
 // ---------------------------------------------------------------------------
