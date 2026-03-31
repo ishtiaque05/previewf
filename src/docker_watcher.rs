@@ -34,16 +34,24 @@ impl DockerPollWatcher {
 
     /// Register a file path to be watched.
     pub async fn track(&self, path: String) {
-        let mut files = self.tracked_files.lock().await;
-        if let std::collections::hash_map::Entry::Vacant(e) = files.entry(path) {
-            let mtime = self
-                .source
-                .stat(e.key())
-                .await
-                .map(|m| m.mtime)
-                .unwrap_or(0);
-            e.insert(mtime);
+        // Check if already tracked without holding the lock across I/O
+        {
+            let files = self.tracked_files.lock().await;
+            if files.contains_key(&path) {
+                return;
+            }
         }
+        let mtime = self
+            .source
+            .stat(&path)
+            .await
+            .map(|m| m.mtime)
+            .unwrap_or_else(|e| {
+                eprintln!("Warning: failed to stat {} for tracking: {e}", path);
+                0
+            });
+        let mut files = self.tracked_files.lock().await;
+        files.entry(path).or_insert(mtime);
     }
 
     /// Unregister a file path.
@@ -96,7 +104,8 @@ impl DockerPollWatcher {
                         updates.push((path.clone(), meta.mtime));
                     }
                 }
-                Err(_) => {
+                Err(e) => {
+                    eprintln!("Warning: docker poll watcher failed to stat {}: {e}", path);
                     changed = true;
                 }
             }

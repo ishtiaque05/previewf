@@ -132,11 +132,21 @@ impl FileSource for LocalSource {
     }
 
     async fn is_file(&self, path: &str) -> bool {
-        self.resolve(path).map(|p| p.is_file()).unwrap_or(false)
+        let Ok(p) = self.resolve(path) else {
+            return false;
+        };
+        tokio::task::spawn_blocking(move || p.is_file())
+            .await
+            .unwrap_or(false)
     }
 
     async fn is_dir(&self, path: &str) -> bool {
-        self.resolve(path).map(|p| p.is_dir()).unwrap_or(false)
+        let Ok(p) = self.resolve(path) else {
+            return false;
+        };
+        tokio::task::spawn_blocking(move || p.is_dir())
+            .await
+            .unwrap_or(false)
     }
 
     fn display_root(&self) -> String {

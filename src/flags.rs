@@ -74,6 +74,17 @@ fn is_code_fence(line: &str) -> bool {
     trimmed.starts_with("```") || trimmed.starts_with("~~~")
 }
 
+/// Validate that a label matches `\w+` (alphanumeric and underscore only).
+fn validate_label(label: &str) -> Result<(), PreviewError> {
+    if label.is_empty() || !label.chars().all(|c| c.is_alphanumeric() || c == '_') {
+        return Err(PreviewError::FlagParse {
+            line: 0,
+            detail: format!("Invalid label: {label}. Must be alphanumeric/underscore only."),
+        });
+    }
+    Ok(())
+}
+
 /// Inject a new flag at the given line number (1-indexed).
 pub fn inject_flag(
     content: &str,
@@ -102,6 +113,7 @@ pub fn inject_flag(
         });
     }
 
+    validate_label(label)?;
     let sanitized = sanitize_comment(comment);
     let next_id = next_flag_id(content);
     let flag_tag = format!(" <flag:{next_id}>{label}: {sanitized}</flag>");
@@ -163,6 +175,9 @@ pub fn update_flag_comment(
     new_comment: &str,
     new_label: Option<&str>,
 ) -> Result<String, PreviewError> {
+    if let Some(label) = new_label {
+        validate_label(label)?;
+    }
     let target = Regex::new(&format!(r"<flag:{id}>(\w+):\s*.+?</flag>")).map_err(|e| {
         PreviewError::FlagParse {
             line: 0,
