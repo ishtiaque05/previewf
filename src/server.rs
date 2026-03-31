@@ -17,6 +17,8 @@ use tokio::sync::{broadcast, Mutex};
 use crate::flags::{extract_flags, inject_flag, remove_flag, update_flag_comment, FlagReport};
 use crate::html;
 use crate::markdown::render_html;
+use crate::source::local::LocalSource;
+use crate::source::{EntryType, FileSource};
 use crate::PreviewError;
 
 // ---------------------------------------------------------------------------
@@ -36,6 +38,7 @@ struct Assets;
 pub struct ServerConfig {
     path: PathBuf,
     port: u16,
+    host: String,
     live_reload: bool,
 }
 
@@ -48,6 +51,10 @@ impl ServerConfig {
         self.port
     }
 
+    pub fn host(&self) -> &str {
+        &self.host
+    }
+
     pub fn live_reload(&self) -> bool {
         self.live_reload
     }
@@ -57,6 +64,7 @@ impl ServerConfig {
 pub struct ServerBuilder {
     path: PathBuf,
     port: u16,
+    host: String,
     live_reload: bool,
 }
 
@@ -65,6 +73,7 @@ impl ServerBuilder {
         Self {
             path: PathBuf::from("."),
             port: 4567,
+            host: "127.0.0.1".to_string(),
             live_reload: true,
         }
     }
@@ -76,6 +85,11 @@ impl ServerBuilder {
 
     pub fn port(mut self, port: u16) -> Self {
         self.port = port;
+        self
+    }
+
+    pub fn host<S: Into<String>>(mut self, host: S) -> Self {
+        self.host = host.into();
         self
     }
 
@@ -91,6 +105,7 @@ impl ServerBuilder {
         Ok(ServerConfig {
             path,
             port: self.port,
+            host: self.host,
             live_reload: self.live_reload,
         })
     }
@@ -109,8 +124,11 @@ impl Default for ServerBuilder {
 #[derive(Clone)]
 struct AppState {
     config: ServerConfig,
+    source: Arc<dyn FileSource>,
     reload_tx: broadcast::Sender<()>,
-    file_locks: Arc<Mutex<HashMap<PathBuf, Arc<Mutex<()>>>>>,
+    file_locks: Arc<Mutex<HashMap<String, Arc<Mutex<()>>>>>,
+    #[allow(dead_code)]
+    docker_available: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -131,6 +149,17 @@ async fn security_headers(request: HttpRequest<Body>, next: Next) -> Response {
     response
 }
 
+/// Check whether Docker is available on the system.
+fn check_docker_sync() -> bool {
+    std::process::Command::new("docker")
+        .args(["version", "--format", "{{.Client.Version}}"])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+}
+
 /// Create the axum [`Router`] for the preview server.
 ///
 /// Exposed publicly so integration tests can drive requests without binding
@@ -140,10 +169,18 @@ pub fn create_router(config: ServerConfig) -> Router {
 }
 
 fn create_router_with_reload(config: ServerConfig, reload_tx: broadcast::Sender<()>) -> Router {
+    let source: Arc<dyn FileSource> = Arc::new(
+        LocalSource::new(config.path())
+            .expect("LocalSource creation should not fail after ServerBuilder validated path"),
+    );
+    let docker_available = check_docker_sync();
+
     let state = AppState {
         config,
+        source,
         reload_tx,
         file_locks: Arc::new(Mutex::new(HashMap::new())),
+        docker_available,
     };
 
     Router::new()
@@ -198,12 +235,13 @@ pub async fn run(config: ServerConfig) -> Result<(), PreviewError> {
 
     let app = create_router_with_reload(config.clone(), reload_tx);
 
-    let addr = format!("127.0.0.1:{}", config.port());
+    let addr = format!("{}:{}", config.host(), config.port());
     let listener = tokio::net::TcpListener::bind(&addr).await?;
 
     eprintln!(
-        "previewf serving {} on http://localhost:{}",
+        "previewf serving {} on http://{}:{}",
         config.path().display(),
+        config.host(),
         config.port()
     );
 
@@ -218,7 +256,7 @@ pub async fn run(config: ServerConfig) -> Result<(), PreviewError> {
 
 /// `GET /` — directory listing, or redirect to single file.
 async fn index_handler(State(state): State<AppState>) -> Response {
-    listing_response(&state, "")
+    listing_response(&state, "").await
 }
 
 /// `GET /browse/{*dirpath}` — browse into a subdirectory.
@@ -226,12 +264,13 @@ async fn browse_handler(
     State(state): State<AppState>,
     AxumPath(dirpath): AxumPath<String>,
 ) -> Response {
-    listing_response(&state, &dirpath)
+    listing_response(&state, &dirpath).await
 }
 
 /// Shared listing logic for both `/` and `/browse/{dirpath}`.
-fn listing_response(state: &AppState, subpath: &str) -> Response {
+async fn listing_response(state: &AppState, subpath: &str) -> Response {
     let base = state.config.path();
+    let source = &state.source;
 
     // If the configured path is a single file, redirect to the viewer.
     if base.is_file() && subpath.is_empty() {
@@ -243,15 +282,10 @@ fn listing_response(state: &AppState, subpath: &str) -> Response {
         };
     }
 
-    // Resolve the subdirectory, preventing path traversal.
-    let dir = if subpath.is_empty() {
-        base.to_path_buf()
-    } else {
-        match resolve_path(base, subpath) {
-            Some(p) if p.is_dir() => p,
-            _ => return not_found_response(subpath),
-        }
-    };
+    // Validate that the subdirectory exists, preventing path traversal.
+    if !subpath.is_empty() && !source.is_dir(subpath).await {
+        return not_found_response(subpath);
+    }
 
     // Build breadcrumbs
     let breadcrumb_html = build_breadcrumbs(subpath);
@@ -262,22 +296,29 @@ fn listing_response(state: &AppState, subpath: &str) -> Response {
     let mut json_files: Vec<String> = Vec::new();
     let mut html_files: Vec<String> = Vec::new();
 
-    if let Ok(read_dir) = std::fs::read_dir(&dir) {
-        for entry in read_dir.flatten() {
-            let name = entry.file_name().to_string_lossy().to_string();
-            let file_type = entry.file_type();
+    if let Ok(entries) = source.list_dir(subpath).await {
+        for entry in entries {
+            let name = entry.name;
 
-            if let Ok(ft) = file_type {
-                if ft.is_dir() {
+            match entry.entry_type {
+                EntryType::Directory => {
                     dirs.push(name);
-                } else if is_markdown(&name) {
-                    let content = std::fs::read_to_string(entry.path()).unwrap_or_default();
-                    let flag_count = extract_flags(&content).len();
-                    md_files.push((name, flag_count));
-                } else if is_json(&name) {
-                    json_files.push(name);
-                } else if name.ends_with(".html") || name.ends_with(".htm") {
-                    html_files.push(name);
+                }
+                EntryType::File => {
+                    if is_markdown(&name) {
+                        let file_path = if subpath.is_empty() {
+                            name.clone()
+                        } else {
+                            format!("{}/{}", subpath.trim_end_matches('/'), name)
+                        };
+                        let content = source.read_file(&file_path).await.unwrap_or_default();
+                        let flag_count = extract_flags(&content).len();
+                        md_files.push((name, flag_count));
+                    } else if is_json(&name) {
+                        json_files.push(name);
+                    } else if name.ends_with(".html") || name.ends_with(".htm") {
+                        html_files.push(name);
+                    }
                 }
             }
         }
@@ -353,9 +394,9 @@ fn listing_response(state: &AppState, subpath: &str) -> Response {
     );
 
     let dir_display = if subpath.is_empty() {
-        base.display().to_string()
+        source.display_root()
     } else {
-        format!("{}/{}", base.display(), subpath)
+        format!("{}/{}", source.display_root(), subpath)
     };
 
     // Load the index template from embedded assets
@@ -410,12 +451,7 @@ async fn view_handler(
     State(state): State<AppState>,
     AxumPath(filepath): AxumPath<String>,
 ) -> Response {
-    let full_path = match resolve_path(state.config.path(), &filepath) {
-        Some(p) => p,
-        None => return not_found_response(&filepath),
-    };
-
-    let content = match std::fs::read_to_string(&full_path) {
+    let content = match state.source.read_file(&filepath).await {
         Ok(c) => c,
         Err(_) => return not_found_response(&filepath),
     };
@@ -652,12 +688,7 @@ async fn raw_handler(
     State(state): State<AppState>,
     AxumPath(filepath): AxumPath<String>,
 ) -> Response {
-    let full_path = match resolve_path(state.config.path(), &filepath) {
-        Some(p) => p,
-        None => return not_found_response(&filepath),
-    };
-
-    match std::fs::read_to_string(&full_path) {
+    match state.source.read_file(&filepath).await {
         Ok(content) => Html(content).into_response(),
         Err(_) => not_found_response(&filepath),
     }
@@ -668,12 +699,7 @@ async fn flags_handler(
     State(state): State<AppState>,
     AxumPath(filepath): AxumPath<String>,
 ) -> Response {
-    let full_path = match resolve_path(state.config.path(), &filepath) {
-        Some(p) => p,
-        None => return not_found_response(&filepath),
-    };
-
-    let content = match std::fs::read_to_string(&full_path) {
+    let content = match state.source.read_file(&filepath).await {
         Ok(c) => c,
         Err(_) => return not_found_response(&filepath),
     };
@@ -729,22 +755,17 @@ async fn flag_handler(
             .into_response();
     }
 
-    let full_path = match resolve_path(state.config.path(), &filepath) {
-        Some(p) => p,
-        None => return not_found_response(&filepath),
-    };
-
     // Acquire per-file lock to prevent concurrent read-modify-write races
     let file_lock = {
         let mut locks = state.file_locks.lock().await;
         locks
-            .entry(full_path.clone())
+            .entry(filepath.clone())
             .or_insert_with(|| Arc::new(Mutex::new(())))
             .clone()
     };
     let _guard = file_lock.lock().await;
 
-    let content = match std::fs::read_to_string(&full_path) {
+    let content = match state.source.read_file(&filepath).await {
         Ok(c) => c,
         Err(_) => return not_found_response(&filepath),
     };
@@ -763,7 +784,7 @@ async fn flag_handler(
     };
 
     match inject_flag(&content, line, &body.comment, &body.label) {
-        Ok(new_content) => match std::fs::write(&full_path, &new_content) {
+        Ok(new_content) => match state.source.write_file(&filepath, &new_content).await {
             Ok(_) => {
                 // Don't send explicit reload — the file watcher will detect the write
                 (StatusCode::OK, "Flag injected").into_response()
@@ -795,27 +816,22 @@ async fn delete_flag_handler(
             .into_response();
     }
 
-    let full_path = match resolve_path(state.config.path(), &filepath) {
-        Some(p) => p,
-        None => return not_found_response(&filepath),
-    };
-
     let file_lock = {
         let mut locks = state.file_locks.lock().await;
         locks
-            .entry(full_path.clone())
+            .entry(filepath.clone())
             .or_insert_with(|| Arc::new(Mutex::new(())))
             .clone()
     };
     let _guard = file_lock.lock().await;
 
-    let content = match std::fs::read_to_string(&full_path) {
+    let content = match state.source.read_file(&filepath).await {
         Ok(c) => c,
         Err(_) => return not_found_response(&filepath),
     };
 
     match remove_flag(&content, id) {
-        Ok(new_content) => match std::fs::write(&full_path, &new_content) {
+        Ok(new_content) => match state.source.write_file(&filepath, &new_content).await {
             Ok(_) => (StatusCode::OK, "Flag removed").into_response(),
             Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
         },
@@ -848,27 +864,22 @@ async fn update_flag_handler(
         return (StatusCode::BAD_REQUEST, "Comment cannot be empty").into_response();
     }
 
-    let full_path = match resolve_path(state.config.path(), &filepath) {
-        Some(p) => p,
-        None => return not_found_response(&filepath),
-    };
-
     let file_lock = {
         let mut locks = state.file_locks.lock().await;
         locks
-            .entry(full_path.clone())
+            .entry(filepath.clone())
             .or_insert_with(|| Arc::new(Mutex::new(())))
             .clone()
     };
     let _guard = file_lock.lock().await;
 
-    let content = match std::fs::read_to_string(&full_path) {
+    let content = match state.source.read_file(&filepath).await {
         Ok(c) => c,
         Err(_) => return not_found_response(&filepath),
     };
 
     match update_flag_comment(&content, id, &body.comment, body.label.as_deref()) {
-        Ok(new_content) => match std::fs::write(&full_path, &new_content) {
+        Ok(new_content) => match state.source.write_file(&filepath, &new_content).await {
             Ok(_) => (StatusCode::OK, "Flag updated").into_response(),
             Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
         },
@@ -944,8 +955,7 @@ struct TreeNode {
 
 /// `GET /api/tree` — return the full directory tree as JSON.
 async fn tree_handler(State(state): State<AppState>) -> Response {
-    let base = state.config.path();
-    let tree = build_tree(base, base);
+    let tree = build_tree_async(&*state.source, "", 0).await;
 
     match serde_json::to_string(&tree) {
         Ok(json) => (
@@ -960,71 +970,77 @@ async fn tree_handler(State(state): State<AppState>) -> Response {
 
 const MAX_TREE_DEPTH: usize = 10;
 
-/// Recursively build a tree of directories and viewable files.
-fn build_tree(dir: &Path, base: &Path) -> Vec<TreeNode> {
-    build_tree_inner(dir, base, 0)
-}
-
-fn build_tree_inner(dir: &Path, base: &Path, depth: usize) -> Vec<TreeNode> {
-    if depth >= MAX_TREE_DEPTH {
-        return Vec::new();
-    }
-
-    let Ok(read_dir) = std::fs::read_dir(dir) else {
-        return Vec::new();
-    };
-
-    let mut dir_nodes: Vec<TreeNode> = Vec::new();
-    let mut file_nodes: Vec<TreeNode> = Vec::new();
-
-    for entry in read_dir.flatten() {
-        let name = entry.file_name().to_string_lossy().to_string();
-
-        // Skip hidden files/directories (e.g. .git, .cache)
-        if name.starts_with('.') {
-            continue;
+/// Recursively build a tree of directories and viewable files via FileSource.
+fn build_tree_async<'a>(
+    source: &'a dyn FileSource,
+    path: &'a str,
+    depth: usize,
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = Vec<TreeNode>> + Send + 'a>> {
+    Box::pin(async move {
+        if depth >= MAX_TREE_DEPTH {
+            return Vec::new();
         }
 
-        let Ok(ft) = entry.file_type() else {
-            continue;
+        let Ok(entries) = source.list_dir(path).await else {
+            return Vec::new();
         };
 
-        // Compute relative path from base; skip if strip_prefix fails
-        let rel_path = match entry.path().strip_prefix(base) {
-            Ok(p) => p.to_string_lossy().to_string(),
-            Err(_) => continue,
-        };
+        let mut dir_nodes: Vec<TreeNode> = Vec::new();
+        let mut file_nodes: Vec<TreeNode> = Vec::new();
 
-        if ft.is_dir() {
-            let children = build_tree_inner(&entry.path(), base, depth + 1);
-            dir_nodes.push(TreeNode {
-                name,
-                node_type: "dir",
-                path: Some(rel_path),
-                children: Some(children),
-            });
-        } else if is_markdown(&name) || is_json(&name) {
-            let node_type = if is_markdown(&name) { "md" } else { "json" };
-            file_nodes.push(TreeNode {
-                name,
-                node_type,
-                path: Some(rel_path),
-                children: None,
-            });
-        } else if name.ends_with(".html") || name.ends_with(".htm") {
-            file_nodes.push(TreeNode {
-                name,
-                node_type: "html",
-                path: Some(rel_path),
-                children: None,
-            });
+        for entry in entries {
+            let name = entry.name;
+
+            // Hidden files are already filtered by LocalSource::list_dir
+
+            let rel_path = if path.is_empty() {
+                name.clone()
+            } else {
+                format!("{}/{}", path, name)
+            };
+
+            match entry.entry_type {
+                EntryType::Directory => {
+                    let children = build_tree_async(source, &rel_path, depth + 1).await;
+                    dir_nodes.push(TreeNode {
+                        name,
+                        node_type: "dir",
+                        path: Some(rel_path),
+                        children: Some(children),
+                    });
+                }
+                EntryType::File => {
+                    if is_markdown(&name) {
+                        file_nodes.push(TreeNode {
+                            name,
+                            node_type: "md",
+                            path: Some(rel_path),
+                            children: None,
+                        });
+                    } else if is_json(&name) {
+                        file_nodes.push(TreeNode {
+                            name,
+                            node_type: "json",
+                            path: Some(rel_path),
+                            children: None,
+                        });
+                    } else if name.ends_with(".html") || name.ends_with(".htm") {
+                        file_nodes.push(TreeNode {
+                            name,
+                            node_type: "html",
+                            path: Some(rel_path),
+                            children: None,
+                        });
+                    }
+                }
+            }
         }
-    }
 
-    dir_nodes.sort_by_key(|a| a.name.to_lowercase());
-    file_nodes.sort_by_key(|a| a.name.to_lowercase());
-    dir_nodes.extend(file_nodes);
-    dir_nodes
+        dir_nodes.sort_by_key(|a| a.name.to_lowercase());
+        file_nodes.sort_by_key(|a| a.name.to_lowercase());
+        dir_nodes.extend(file_nodes);
+        dir_nodes
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -1041,26 +1057,6 @@ fn parse_id_and_filepath(raw: &str) -> Option<(u32, String)> {
         return None;
     }
     Some((id, rest.to_string()))
-}
-
-/// Resolve a relative filepath against the configured base path.
-///
-/// Returns `None` if the resolved path escapes the base directory
-/// (path traversal prevention).
-fn resolve_path(base: &Path, filepath: &str) -> Option<PathBuf> {
-    if base.is_file() {
-        return Some(base.to_path_buf());
-    }
-
-    let joined = base.join(filepath);
-    let canonical = std::fs::canonicalize(&joined).ok()?;
-    let base_canonical = std::fs::canonicalize(base).ok()?;
-
-    if canonical.starts_with(&base_canonical) {
-        Some(canonical)
-    } else {
-        None
-    }
 }
 
 pub fn is_markdown(name: &str) -> bool {
