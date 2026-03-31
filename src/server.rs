@@ -42,6 +42,7 @@ pub struct ServerConfig {
     port: u16,
     host: String,
     live_reload: bool,
+    docker: bool,
 }
 
 impl ServerConfig {
@@ -60,6 +61,10 @@ impl ServerConfig {
     pub fn live_reload(&self) -> bool {
         self.live_reload
     }
+
+    pub fn docker(&self) -> bool {
+        self.docker
+    }
 }
 
 /// Builder for [`ServerConfig`].
@@ -68,6 +73,7 @@ pub struct ServerBuilder {
     port: u16,
     host: String,
     live_reload: bool,
+    docker: bool,
 }
 
 impl ServerBuilder {
@@ -77,6 +83,7 @@ impl ServerBuilder {
             port: 4567,
             host: "127.0.0.1".to_string(),
             live_reload: true,
+            docker: false,
         }
     }
 
@@ -100,6 +107,11 @@ impl ServerBuilder {
         self
     }
 
+    pub fn docker(mut self, enabled: bool) -> Self {
+        self.docker = enabled;
+        self
+    }
+
     /// Build the configuration, validating that the path exists.
     pub fn build(self) -> Result<ServerConfig, PreviewError> {
         let path = std::fs::canonicalize(&self.path)
@@ -109,6 +121,7 @@ impl ServerBuilder {
             port: self.port,
             host: self.host,
             live_reload: self.live_reload,
+            docker: self.docker,
         })
     }
 }
@@ -152,15 +165,19 @@ async fn security_headers(request: HttpRequest<Body>, next: Next) -> Response {
     response
 }
 
-/// Check whether Docker is available on the system.
-fn check_docker_sync() -> bool {
-    std::process::Command::new("docker")
-        .args(["version", "--format", "{{.Client.Version}}"])
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false)
+/// Check whether Docker is available on the system (non-blocking).
+async fn check_docker_available_async() -> bool {
+    tokio::task::spawn_blocking(|| {
+        std::process::Command::new("docker")
+            .args(["version", "--format", "{{.Client.Version}}"])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false)
+    })
+    .await
+    .unwrap_or(false)
 }
 
 /// Create the axum [`Router`] for the preview server.
@@ -168,15 +185,18 @@ fn check_docker_sync() -> bool {
 /// Exposed publicly so integration tests can drive requests without binding
 /// a TCP listener.
 pub fn create_router(config: ServerConfig) -> Router {
-    create_router_with_reload(config, broadcast::channel::<()>(16).0)
+    create_router_with_reload(config, broadcast::channel::<()>(16).0, false)
 }
 
-fn create_router_with_reload(config: ServerConfig, reload_tx: broadcast::Sender<()>) -> Router {
+fn create_router_with_reload(
+    config: ServerConfig,
+    reload_tx: broadcast::Sender<()>,
+    docker_available: bool,
+) -> Router {
     let source: Arc<dyn FileSource> = Arc::new(
         LocalSource::new(config.path())
             .expect("LocalSource creation should not fail after ServerBuilder validated path"),
     );
-    let docker_available = check_docker_sync();
 
     let state = AppState {
         config,
@@ -188,7 +208,7 @@ fn create_router_with_reload(config: ServerConfig, reload_tx: broadcast::Sender<
         docker_reload_txs: Arc::new(Mutex::new(HashMap::new())),
     };
 
-    Router::new()
+    let mut router = Router::new()
         .route("/", get(index_handler))
         .route("/browse/{*dirpath}", get(browse_handler))
         .route("/view/{*filepath}", get(view_handler))
@@ -201,28 +221,36 @@ fn create_router_with_reload(config: ServerConfig, reload_tx: broadcast::Sender<
                 .put(update_flag_handler),
         )
         .route("/api/tree", get(tree_handler))
-        .route("/ws", get(ws_handler))
-        // Docker routes
-        .route("/api/docker/containers", get(docker_containers_handler))
-        .route("/docker/{container}", get(docker_index_handler))
-        .route(
-            "/docker/{container}/browse/{*dirpath}",
-            get(docker_browse_handler),
-        )
-        .route(
-            "/docker/{container}/view/{*filepath}",
-            get(docker_view_handler),
-        )
-        .route(
-            "/docker/{container}/flags/{*filepath}",
-            get(docker_flags_handler),
-        )
-        .route(
-            "/docker/{container}/flag/{*filepath}",
-            post(docker_flag_handler),
-        )
-        .route("/docker/{container}/api/tree", get(docker_tree_handler))
-        .route("/docker/{container}/ws", get(docker_ws_handler))
+        .route("/ws", get(ws_handler));
+
+    // Docker routes are only registered when explicitly enabled via --docker
+    if docker_available {
+        router = router
+            .route("/api/docker/containers", get(docker_containers_handler))
+            .route("/docker/{container}", get(docker_index_handler))
+            .route(
+                "/docker/{container}/browse/{*dirpath}",
+                get(docker_browse_handler),
+            )
+            .route(
+                "/docker/{container}/view/{*filepath}",
+                get(docker_view_handler),
+            )
+            .route(
+                "/docker/{container}/flags/{*filepath}",
+                get(docker_flags_handler),
+            )
+            .route(
+                "/docker/{container}/flag/{*filepath}",
+                post(docker_flag_handler)
+                    .delete(docker_delete_flag_handler)
+                    .put(docker_update_flag_handler),
+            )
+            .route("/docker/{container}/api/tree", get(docker_tree_handler))
+            .route("/docker/{container}/ws", get(docker_ws_handler));
+    }
+
+    router
         .route("/assets/{*filepath}", get(asset_handler))
         .with_state(state)
         .layer(middleware::from_fn(security_headers))
@@ -259,7 +287,20 @@ pub async fn run(config: ServerConfig) -> Result<(), PreviewError> {
         });
     }
 
-    let app = create_router_with_reload(config.clone(), reload_tx);
+    // Only probe Docker when --docker flag was passed
+    let docker_available = if config.docker() {
+        let available = check_docker_available_async().await;
+        if available {
+            eprintln!("Docker detected — container browsing enabled");
+        } else {
+            eprintln!("Warning: --docker flag passed but Docker is not available");
+        }
+        available
+    } else {
+        false
+    };
+
+    let app = create_router_with_reload(config.clone(), reload_tx, docker_available);
 
     let addr = format!("{}:{}", config.host(), config.port());
     let listener = tokio::net::TcpListener::bind(&addr).await?;
@@ -1425,6 +1466,105 @@ async fn docker_flag_handler(
     }
 }
 
+/// `DELETE /docker/{container}/flag/{id}/{filepath…}` — remove a flag from a Docker container file.
+async fn docker_delete_flag_handler(
+    State(state): State<AppState>,
+    AxumPath((container, raw_path)): AxumPath<(String, String)>,
+) -> Response {
+    let source = match get_docker_source(&state, &container).await {
+        Ok(s) => s,
+        Err(e) => return e,
+    };
+
+    let (id, filepath) = match parse_id_and_filepath(&raw_path) {
+        Some(pair) => pair,
+        None => return (StatusCode::BAD_REQUEST, "Invalid flag path").into_response(),
+    };
+
+    if !is_markdown(&filepath) {
+        return (
+            StatusCode::BAD_REQUEST,
+            "Flags can only be removed from markdown files",
+        )
+            .into_response();
+    }
+
+    let lock_key = format!("docker:{}:{}", container, filepath);
+    let file_lock = {
+        let mut locks = state.file_locks.lock().await;
+        locks
+            .entry(lock_key)
+            .or_insert_with(|| Arc::new(Mutex::new(())))
+            .clone()
+    };
+    let _guard = file_lock.lock().await;
+
+    let content = match source.read_file(&filepath).await {
+        Ok(c) => c,
+        Err(_) => return not_found_response(&filepath),
+    };
+
+    match remove_flag(&content, id) {
+        Ok(new_content) => match source.write_file(&filepath, &new_content).await {
+            Ok(_) => (StatusCode::OK, "Flag removed").into_response(),
+            Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        },
+        Err(e) => (StatusCode::NOT_FOUND, e.to_string()).into_response(),
+    }
+}
+
+/// `PUT /docker/{container}/flag/{id}/{filepath…}` — update a flag in a Docker container file.
+async fn docker_update_flag_handler(
+    State(state): State<AppState>,
+    AxumPath((container, raw_path)): AxumPath<(String, String)>,
+    axum::Json(body): axum::Json<UpdateFlagRequest>,
+) -> Response {
+    let source = match get_docker_source(&state, &container).await {
+        Ok(s) => s,
+        Err(e) => return e,
+    };
+
+    let (id, filepath) = match parse_id_and_filepath(&raw_path) {
+        Some(pair) => pair,
+        None => return (StatusCode::BAD_REQUEST, "Invalid flag path").into_response(),
+    };
+
+    if !is_markdown(&filepath) {
+        return (
+            StatusCode::BAD_REQUEST,
+            "Flags can only be edited in markdown files",
+        )
+            .into_response();
+    }
+
+    if body.comment.trim().is_empty() {
+        return (StatusCode::BAD_REQUEST, "Comment cannot be empty").into_response();
+    }
+
+    let lock_key = format!("docker:{}:{}", container, filepath);
+    let file_lock = {
+        let mut locks = state.file_locks.lock().await;
+        locks
+            .entry(lock_key)
+            .or_insert_with(|| Arc::new(Mutex::new(())))
+            .clone()
+    };
+    let _guard = file_lock.lock().await;
+
+    let content = match source.read_file(&filepath).await {
+        Ok(c) => c,
+        Err(_) => return not_found_response(&filepath),
+    };
+
+    match update_flag_comment(&content, id, &body.comment, body.label.as_deref()) {
+        Ok(new_content) => match source.write_file(&filepath, &new_content).await {
+            Ok(_) => (StatusCode::OK, "Flag updated").into_response(),
+            Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        },
+        Err(e) => (StatusCode::NOT_FOUND, e.to_string()).into_response(),
+    }
+}
+
 /// `GET /docker/{container}/api/tree` — return the directory tree for a Docker container.
 async fn docker_tree_handler(
     State(state): State<AppState>,
@@ -1512,7 +1652,12 @@ pub fn create_docker_router(
         .route("/view/{*filepath}", get(view_handler))
         .route("/raw/{*filepath}", get(raw_handler))
         .route("/flags/{*filepath}", get(flags_handler))
-        .route("/flag/{*filepath}", post(flag_handler))
+        .route(
+            "/flag/{*filepath}",
+            post(flag_handler)
+                .delete(delete_flag_handler)
+                .put(update_flag_handler),
+        )
         .route("/api/tree", get(tree_handler))
         .route("/ws", get(ws_handler))
         .route("/assets/{*filepath}", get(asset_handler))

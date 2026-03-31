@@ -33,6 +33,10 @@ enum Commands {
         /// Port to listen on
         #[arg(short, long, default_value_t = 4567)]
         port: u16,
+
+        /// Enable Docker container browsing in the web UI
+        #[arg(long)]
+        docker: bool,
     },
 
     /// View a markdown file in the terminal
@@ -104,12 +108,18 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Serve { path, host, port } => {
+        Commands::Serve {
+            path,
+            host,
+            port,
+            docker,
+        } => {
             let config = ServerBuilder::new()
                 .path(&path)
                 .host(host)
                 .port(port)
                 .live_reload(true)
+                .docker(docker)
                 .build()
                 .context("Failed to configure server")?;
 

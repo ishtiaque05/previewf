@@ -1,9 +1,14 @@
+use std::time::Duration;
+
 use async_trait::async_trait;
 use tokio::process::Command;
 
 use super::{DirEntry, EntryType, FileMeta, FileSource};
 use crate::docker::validate_container_name;
 use crate::PreviewError;
+
+/// Timeout for all `docker exec` subprocess calls.
+const DOCKER_EXEC_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// File source backed by a Docker container's filesystem.
 ///
@@ -17,7 +22,7 @@ pub struct DockerSource {
 impl DockerSource {
     pub fn new(container: String, base_path: String) -> Result<Self, PreviewError> {
         validate_container_name(&container)?;
-        let base_path = normalize_container_path(&base_path);
+        let base_path = normalize_container_path(&base_path)?;
         Ok(Self {
             container,
             base_path,
@@ -33,20 +38,13 @@ impl DockerSource {
         let full = if path.is_empty() {
             self.base_path.clone()
         } else {
-            let normalized = normalize_container_path(path);
+            let normalized = normalize_container_path(path)?;
             if self.base_path == "/" {
                 normalized
             } else {
                 format!("{}{}", self.base_path, normalized)
             }
         };
-
-        if full.split('/').any(|seg| seg == "..") {
-            return Err(PreviewError::ContainerPathNotFound {
-                container: self.container.clone(),
-                path: path.to_string(),
-            });
-        }
 
         if !full.starts_with(&self.base_path) {
             return Err(PreviewError::ContainerPathNotFound {
@@ -59,30 +57,45 @@ impl DockerSource {
     }
 }
 
-fn normalize_container_path(path: &str) -> String {
+/// Normalize a container path: ensure leading slash, collapse double slashes,
+/// remove "." segments, reject ".." segments with an error.
+fn normalize_container_path(path: &str) -> Result<String, PreviewError> {
     let trimmed = path.trim_matches('/');
     if trimmed.is_empty() {
-        return "/".to_string();
+        return Ok("/".to_string());
     }
     let cleaned: Vec<&str> = trimmed
         .split('/')
         .filter(|s| !s.is_empty() && *s != ".")
         .collect();
     if cleaned.contains(&"..") {
-        return "/".to_string();
+        return Err(PreviewError::ContainerPathNotFound {
+            container: String::new(),
+            path: path.to_string(),
+        });
     }
-    format!("/{}", cleaned.join("/"))
+    Ok(format!("/{}", cleaned.join("/")))
+}
+
+/// Run a docker exec command with a timeout.
+async fn docker_exec_output(cmd: &mut Command) -> Result<std::process::Output, PreviewError> {
+    tokio::time::timeout(DOCKER_EXEC_TIMEOUT, cmd.output())
+        .await
+        .map_err(|_| PreviewError::DockerExec("docker exec timed out".to_string()))?
+        .map_err(|e| PreviewError::DockerExec(e.to_string()))
 }
 
 #[async_trait]
 impl FileSource for DockerSource {
     async fn read_file(&self, path: &str) -> Result<String, PreviewError> {
         let full = self.resolve(path)?;
-        let output = Command::new("docker")
-            .args(["exec", &self.container, "cat", &full])
-            .output()
-            .await
-            .map_err(|e| PreviewError::DockerExec(e.to_string()))?;
+        let output = docker_exec_output(Command::new("docker").args([
+            "exec",
+            &self.container,
+            "cat",
+            &full,
+        ]))
+        .await?;
 
         if output.status.success() {
             Ok(String::from_utf8_lossy(&output.stdout).to_string())
@@ -96,11 +109,14 @@ impl FileSource for DockerSource {
 
     async fn list_dir(&self, path: &str) -> Result<Vec<DirEntry>, PreviewError> {
         let full = self.resolve(path)?;
-        let output = Command::new("docker")
-            .args(["exec", &self.container, "ls", "-1F", &full])
-            .output()
-            .await
-            .map_err(|e| PreviewError::DockerExec(e.to_string()))?;
+        let output = docker_exec_output(Command::new("docker").args([
+            "exec",
+            &self.container,
+            "ls",
+            "-1F",
+            &full,
+        ]))
+        .await?;
 
         if !output.status.success() {
             return Err(PreviewError::ContainerPathNotFound {
@@ -139,11 +155,15 @@ impl FileSource for DockerSource {
 
     async fn stat(&self, path: &str) -> Result<FileMeta, PreviewError> {
         let full = self.resolve(path)?;
-        let output = Command::new("docker")
-            .args(["exec", &self.container, "stat", "-c", "%Y %s %F", &full])
-            .output()
-            .await
-            .map_err(|e| PreviewError::DockerExec(e.to_string()))?;
+        let output = docker_exec_output(Command::new("docker").args([
+            "exec",
+            &self.container,
+            "stat",
+            "-c",
+            "%Y %s %F",
+            &full,
+        ]))
+        .await?;
 
         if !output.status.success() {
             return Err(PreviewError::ContainerPathNotFound {
@@ -173,30 +193,30 @@ impl FileSource for DockerSource {
 
     async fn write_file(&self, path: &str, content: &str) -> Result<(), PreviewError> {
         let full = self.resolve(path)?;
+        // Use tee with direct args — no shell interpolation, no injection surface.
         let mut child = tokio::process::Command::new("docker")
-            .args([
-                "exec",
-                "-i",
-                &self.container,
-                "sh",
-                "-c",
-                &format!("cat > '{full}'"),
-            ])
+            .args(["exec", "-i", &self.container, "tee", &full])
             .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::null())
             .spawn()
             .map_err(|e| PreviewError::DockerExec(e.to_string()))?;
 
-        if let Some(mut stdin) = child.stdin.take() {
-            use tokio::io::AsyncWriteExt;
-            stdin
-                .write_all(content.as_bytes())
-                .await
-                .map_err(|e| PreviewError::DockerExec(e.to_string()))?;
-        }
+        let Some(mut stdin) = child.stdin.take() else {
+            return Err(PreviewError::DockerExec(
+                "Failed to open stdin pipe for docker exec".to_string(),
+            ));
+        };
 
-        let status = child
-            .wait()
+        use tokio::io::AsyncWriteExt;
+        stdin
+            .write_all(content.as_bytes())
             .await
+            .map_err(|e| PreviewError::DockerExec(e.to_string()))?;
+        drop(stdin); // Close pipe so tee receives EOF
+
+        let status = tokio::time::timeout(DOCKER_EXEC_TIMEOUT, child.wait())
+            .await
+            .map_err(|_| PreviewError::DockerExec("docker exec timed out".to_string()))?
             .map_err(|e| PreviewError::DockerExec(e.to_string()))?;
 
         if status.success() {
@@ -213,24 +233,32 @@ impl FileSource for DockerSource {
         let Ok(full) = self.resolve(path) else {
             return false;
         };
-        Command::new("docker")
-            .args(["exec", &self.container, "test", "-f", &full])
-            .output()
-            .await
-            .map(|o| o.status.success())
-            .unwrap_or(false)
+        docker_exec_output(Command::new("docker").args([
+            "exec",
+            &self.container,
+            "test",
+            "-f",
+            &full,
+        ]))
+        .await
+        .map(|o| o.status.success())
+        .unwrap_or(false)
     }
 
     async fn is_dir(&self, path: &str) -> bool {
         let Ok(full) = self.resolve(path) else {
             return false;
         };
-        Command::new("docker")
-            .args(["exec", &self.container, "test", "-d", &full])
-            .output()
-            .await
-            .map(|o| o.status.success())
-            .unwrap_or(false)
+        docker_exec_output(Command::new("docker").args([
+            "exec",
+            &self.container,
+            "test",
+            "-d",
+            &full,
+        ]))
+        .await
+        .map(|o| o.status.success())
+        .unwrap_or(false)
     }
 
     fn display_root(&self) -> String {
