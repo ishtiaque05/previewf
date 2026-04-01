@@ -1033,7 +1033,6 @@ img {
     font-weight: 500;
     font-size: 0.95rem;
     transition: background-color 200ms ease, border-color 300ms ease;
-    animation: slideInUp 300ms ease-out both;
 }
 
 .file-entry:first-child {
@@ -1127,18 +1126,15 @@ img {
     white-space: nowrap;
 }
 
-/* Staggered slide-in for file entries */
-.file-entry:nth-child(1) { animation-delay: 0ms; }
-.file-entry:nth-child(2) { animation-delay: 50ms; }
-.file-entry:nth-child(3) { animation-delay: 100ms; }
-.file-entry:nth-child(4) { animation-delay: 150ms; }
-.file-entry:nth-child(5) { animation-delay: 200ms; }
-.file-entry:nth-child(6) { animation-delay: 250ms; }
-.file-entry:nth-child(7) { animation-delay: 300ms; }
-.file-entry:nth-child(8) { animation-delay: 350ms; }
-.file-entry:nth-child(9) { animation-delay: 400ms; }
-.file-entry:nth-child(10) { animation-delay: 450ms; }
-.file-entry:nth-child(n+11) { animation-delay: 500ms; }
+/* Subtle fade-in for the entire file list (no per-entry stagger) */
+.file-list {
+    animation: fadeIn 200ms ease-out;
+}
+
+@keyframes fadeIn {
+    from { opacity: 0; }
+    to { opacity: 1; }
+}
 
 .listing-summary {
     margin-top: 1.6em;
@@ -1475,45 +1471,138 @@ img {
 
 /* Docker section */
 .docker-section {
-    margin-top: 2rem;
-    padding-top: 1.5rem;
-    border-top: 1px solid var(--border);
+    margin-top: 2.5rem;
+    padding-top: 2rem;
+    border-top: 1px solid var(--border-color);
+}
+.docker-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 1rem;
 }
 .docker-section-title {
     font-family: var(--font-heading);
-    font-size: 1.25rem;
+    font-size: 1.1rem;
     font-weight: 700;
-    margin-bottom: 1rem;
-    color: var(--heading);
-}
-.docker-entry {
-    border-left: 3px solid var(--accent) !important;
-}
-.docker-icon {
-    font-size: 1.1em;
-}
-.docker-badge {
-    font-size: 0.78em;
-    color: var(--text-muted);
+    color: var(--text);
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
 }
 .docker-refresh {
-    margin-top: 0.75rem;
-    padding: 0.35rem 1rem;
-    font-family: var(--font-sans);
-    font-size: 0.85rem;
-    background: var(--bg-alt);
-    border: 1px solid var(--border);
-    border-radius: 4px;
+    width: 32px;
+    height: 32px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1.1rem;
+    background: none;
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
     cursor: pointer;
-    color: var(--text);
+    color: var(--text-muted);
+    transition: color 200ms ease, border-color 200ms ease, transform 300ms ease;
 }
 .docker-refresh:hover {
-    background: var(--border);
+    color: var(--accent);
+    border-color: var(--accent);
+    transform: rotate(180deg);
+}
+.docker-search-wrap {
+    margin-bottom: 1rem;
+}
+.docker-search {
+    width: 100%;
+    padding: 0.5rem 0.75rem;
+    font-family: 'DM Sans', system-ui, sans-serif;
+    font-size: 0.85rem;
+    background: var(--bg);
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    color: var(--text);
+    outline: none;
+    transition: border-color 200ms ease, box-shadow 200ms ease;
+}
+.docker-search:focus {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 15%, transparent);
+}
+.docker-search::placeholder {
+    color: var(--text-muted);
+    opacity: 0.7;
+}
+.docker-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+}
+.docker-card {
+    display: block;
+    padding: 0.85rem 1rem;
+    background: var(--bg-surface);
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    text-decoration: none;
+    color: var(--text);
+    transition: border-color 200ms ease, box-shadow 200ms ease;
+}
+.docker-card:hover {
+    border-color: var(--accent);
+    box-shadow: var(--shadow-sm);
+    text-decoration: none;
+    color: var(--text);
+}
+.docker-card-top {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin-bottom: 0.35rem;
+}
+.docker-card-icon {
+    font-size: 1rem;
+    flex-shrink: 0;
+}
+.docker-card-name {
+    font-family: 'DM Sans', system-ui, sans-serif;
+    font-weight: 600;
+    font-size: 0.95rem;
+}
+.docker-card-status {
+    margin-left: auto;
+    font-family: 'DM Sans', system-ui, sans-serif;
+    font-size: 0.7rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    padding: 0.15em 0.5em;
+    border-radius: 3px;
+    background: color-mix(in srgb, var(--accent) 12%, transparent);
+    color: var(--accent);
+}
+.docker-card-meta {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    font-family: 'DM Sans', system-ui, sans-serif;
+    font-size: 0.78rem;
+    color: var(--text-muted);
+    padding-left: 1.5rem;
+}
+.docker-card-meta-item {
+    display: flex;
+    align-items: center;
+    gap: 0.3rem;
+}
+.docker-card-meta-label {
+    opacity: 0.6;
 }
 .docker-empty {
     color: var(--text-muted);
     font-style: italic;
-    padding: 0.5rem 0;
+    font-family: 'DM Sans', system-ui, sans-serif;
+    font-size: 0.85rem;
+    padding: 1.5rem 0;
+    text-align: center;
 }
 
 /* --------------------------------------------------------------------------

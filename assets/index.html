@@ -41,9 +41,14 @@
                     {{summary}}
                 </div>
                 <div id="docker-section" class="docker-section" style="display:none">
-                    <h2 class="docker-section-title">&#128051; Docker Containers</h2>
+                    <div class="docker-header">
+                        <h2 class="docker-section-title">Containers</h2>
+                        <button id="docker-refresh" class="docker-refresh" aria-label="Refresh containers">&#8635;</button>
+                    </div>
+                    <div class="docker-search-wrap">
+                        <input id="docker-search" class="docker-search" type="text" placeholder="Filter containers..." aria-label="Filter containers">
+                    </div>
                     <div id="docker-list" class="docker-list"></div>
-                    <button id="docker-refresh" class="docker-refresh">Refresh</button>
                 </div>
             </div>
         </main>

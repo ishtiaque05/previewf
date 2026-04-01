@@ -7,6 +7,13 @@
 (function () {
     'use strict';
 
+    // Detect Docker context from current URL — used throughout for API paths
+    var dockerMatch = window.location.pathname.match(/^\/docker\/([^/]+)/);
+    var dockerContainer = dockerMatch ? dockerMatch[1] : null;
+    var apiPrefix = dockerContainer
+        ? '/docker/' + encodeURIComponent(dockerContainer)
+        : '';
+
     /* ----------------------------------------------------------------------
        1. Theme Toggle
        ---------------------------------------------------------------------- */
@@ -117,9 +124,13 @@
             localStorage.setItem(NAV_KEY, sidebar.classList.contains('collapsed') ? 'collapsed' : 'open');
         });
 
-        // Fetch and render tree
+        // Fetch and render tree — use Docker endpoint when on a Docker page
         if (treeEl) {
-            fetch('/api/tree')
+            var treeUrl = dockerContainer
+                ? '/docker/' + encodeURIComponent(dockerContainer) + '/api/tree'
+                : '/api/tree';
+
+            fetch(treeUrl)
                 .then(function (r) {
                     if (!r.ok) throw new Error('Tree API returned ' + r.status);
                     return r.json();
@@ -214,12 +225,15 @@
         var link = document.createElement('a');
         link.className = 'tree-item tree-depth-' + Math.min(depth, 5);
 
-        // Determine href based on type
+        // Determine href based on type — prefix with Docker path when applicable
         var encodedPath = encodeFilePath(node.path);
+        var pathPrefix = dockerContainer
+            ? '/docker/' + encodeURIComponent(dockerContainer)
+            : '';
         if (node.type === 'md' || node.type === 'json') {
-            link.href = '/view/' + encodedPath;
+            link.href = pathPrefix + '/view/' + encodedPath;
         } else if (node.type === 'html') {
-            link.href = '/raw/' + encodedPath;
+            link.href = pathPrefix + '/raw/' + encodedPath;
         }
 
         var icon = document.createElement('span');
@@ -246,8 +260,9 @@
 
     function highlightCurrentFile() {
         var path = window.location.pathname;
-        // Extract the file/dir path from the URL
-        var match = path.match(/^\/(view|raw|browse)\/(.+)$/);
+        // Extract the file/dir path from the URL (works for both local and Docker)
+        var match = path.match(/^\/(view|raw|browse)\/(.+)$/)
+            || path.match(/^\/docker\/[^/]+\/(view|raw|browse)\/(.+)$/);
         if (!match) return;
 
         var filePath = match[2];
@@ -312,7 +327,7 @@
         var flagCountEl = document.getElementById('flag-count');
         if (!flagList) return;
 
-        var url = '/flags/' + currentFilepath.split('/').map(encodeURIComponent).join('/');
+        var url = apiPrefix + '/flags/' + currentFilepath.split('/').map(encodeURIComponent).join('/');
 
         fetch(url)
             .then(function (r) {
@@ -418,7 +433,7 @@
 
         // Delete handler
         deleteBtn.addEventListener('click', function () {
-            var url = '/flag/' + flag.id + '/' + currentFilepath.split('/').map(encodeURIComponent).join('/');
+            var url = apiPrefix + '/flag/' + flag.id + '/' + currentFilepath.split('/').map(encodeURIComponent).join('/');
             fetch(url, { method: 'DELETE' })
                 .then(function (r) {
                     if (!r.ok) throw new Error('Delete failed: ' + r.status);
@@ -494,7 +509,7 @@
                 exitEditMode();
                 return;
             }
-            var url = '/flag/' + flag.id + '/' + currentFilepath.split('/').map(encodeURIComponent).join('/');
+            var url = apiPrefix + '/flag/' + flag.id + '/' + currentFilepath.split('/').map(encodeURIComponent).join('/');
             fetch(url, {
                 method: 'PUT',
                 headers: { 'Content-Type': 'application/json' },
@@ -529,7 +544,9 @@
         var breadcrumbLinks = document.querySelectorAll('.breadcrumb-link');
         if (breadcrumbCurrent) {
             var parts = [];
-            for (var i = 1; i < breadcrumbLinks.length; i++) {
+            // Skip "root" (i=0) and on Docker pages also skip the container link (i=1)
+            var startIdx = dockerContainer ? 2 : 1;
+            for (var i = startIdx; i < breadcrumbLinks.length; i++) {
                 parts.push(breadcrumbLinks[i].textContent.trim());
             }
             parts.push(breadcrumbCurrent.textContent.trim());
@@ -760,7 +777,7 @@
             return;
         }
 
-        var url = '/flag/' + currentFilepath.split('/').map(encodeURIComponent).join('/');
+        var url = apiPrefix + '/flag/' + currentFilepath.split('/').map(encodeURIComponent).join('/');
         var body = JSON.stringify({
             comment: comment,
             selected_text: selectedText,
@@ -854,7 +871,7 @@
 
         function connect() {
             var protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-            var wsUrl = protocol + '//' + window.location.host + '/ws';
+            var wsUrl = protocol + '//' + window.location.host + apiPrefix + '/ws';
 
             try {
                 ws = new WebSocket(wsUrl);
@@ -924,11 +941,21 @@
     var section = document.getElementById('docker-section');
     var list = document.getElementById('docker-list');
     var refreshBtn = document.getElementById('docker-refresh');
+    var searchInput = document.getElementById('docker-search');
 
     if (!section || !list) return;
 
+    var allContainers = [];
+
     function clearChildren(el) {
         while (el.firstChild) el.removeChild(el.firstChild);
+    }
+
+    /** Extract a short, human-readable status like "Up 2 hours" → "running" */
+    function shortStatus(status) {
+        if (/^Up /i.test(status)) return 'running';
+        if (/^Exited /i.test(status)) return 'exited';
+        return status.split(' ')[0].toLowerCase();
     }
 
     function renderContainers(containers) {
@@ -936,37 +963,82 @@
         if (containers.length === 0) {
             var empty = document.createElement('p');
             empty.className = 'docker-empty';
-            empty.textContent = 'No running containers found.';
+            empty.textContent = allContainers.length === 0
+                ? 'No running containers found.'
+                : 'No containers match your filter.';
             list.appendChild(empty);
             return;
         }
         containers.forEach(function(c) {
-            var a = document.createElement('a');
-            a.className = 'file-entry docker-entry';
-            a.href = '/docker/' + encodeURIComponent(c.name);
+            var card = document.createElement('a');
+            card.className = 'docker-card';
+            card.href = '/docker/' + encodeURIComponent(c.name);
 
-            var nameGroup = document.createElement('span');
-            nameGroup.className = 'file-entry-name-group';
+            // Top row: icon + name + status badge
+            var top = document.createElement('div');
+            top.className = 'docker-card-top';
 
             var icon = document.createElement('span');
-            icon.className = 'file-entry-icon docker-icon';
+            icon.className = 'docker-card-icon';
             icon.textContent = '\uD83D\uDC33';
+            top.appendChild(icon);
 
             var name = document.createElement('span');
-            name.className = 'file-entry-name';
+            name.className = 'docker-card-name';
             name.textContent = c.name;
+            top.appendChild(name);
 
-            nameGroup.appendChild(icon);
-            nameGroup.appendChild(name);
+            var status = document.createElement('span');
+            status.className = 'docker-card-status';
+            status.textContent = shortStatus(c.status);
+            top.appendChild(status);
 
-            var badge = document.createElement('span');
-            badge.className = 'file-entry-badge docker-badge';
-            badge.textContent = c.image + ' \u00B7 ' + c.status;
+            card.appendChild(top);
 
-            a.appendChild(nameGroup);
-            a.appendChild(badge);
-            list.appendChild(a);
+            // Meta row: image + workdir
+            var meta = document.createElement('div');
+            meta.className = 'docker-card-meta';
+
+            var imageItem = document.createElement('span');
+            imageItem.className = 'docker-card-meta-item';
+            var imageLabel = document.createElement('span');
+            imageLabel.className = 'docker-card-meta-label';
+            imageLabel.textContent = 'image';
+            imageItem.appendChild(imageLabel);
+            var imageVal = document.createElement('span');
+            imageVal.textContent = c.image;
+            imageItem.appendChild(imageVal);
+            meta.appendChild(imageItem);
+
+            if (c.workdir && c.workdir !== '/') {
+                var wdItem = document.createElement('span');
+                wdItem.className = 'docker-card-meta-item';
+                var wdLabel = document.createElement('span');
+                wdLabel.className = 'docker-card-meta-label';
+                wdLabel.textContent = 'workdir';
+                wdItem.appendChild(wdLabel);
+                var wdVal = document.createElement('span');
+                wdVal.textContent = c.workdir;
+                wdItem.appendChild(wdVal);
+                meta.appendChild(wdItem);
+            }
+
+            card.appendChild(meta);
+            list.appendChild(card);
         });
+    }
+
+    function filterContainers() {
+        var query = (searchInput ? searchInput.value : '').toLowerCase().trim();
+        if (!query) {
+            renderContainers(allContainers);
+            return;
+        }
+        var filtered = allContainers.filter(function(c) {
+            return c.name.toLowerCase().indexOf(query) !== -1
+                || c.image.toLowerCase().indexOf(query) !== -1;
+        });
+        renderContainers(filtered);
     }
 
     function fetchContainers() {
@@ -976,8 +1048,9 @@
                 throw new Error('Docker not available');
             })
             .then(function(data) {
+                allContainers = data;
                 section.style.display = '';
-                renderContainers(data);
+                filterContainers();
             })
             .catch(function() {
                 section.style.display = 'none';
@@ -986,6 +1059,10 @@
 
     if (refreshBtn) {
         refreshBtn.addEventListener('click', fetchContainers);
+    }
+
+    if (searchInput) {
+        searchInput.addEventListener('input', filterContainers);
     }
 
     fetchContainers();
