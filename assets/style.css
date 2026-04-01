@@ -98,6 +98,8 @@ html {
     font-size: 16px;
     scroll-behavior: smooth;
     -webkit-text-size-adjust: 100%;
+    background-color: var(--bg);
+    color-scheme: light dark;
 }
 
 body {
@@ -109,7 +111,6 @@ body {
     min-height: 100vh;
     display: flex;
     flex-direction: column;
-    transition: background-color 300ms ease, color 300ms ease;
 }
 
 ::selection {
@@ -1469,25 +1470,39 @@ img {
     color: #F59E0B;
 }
 
-/* Docker section */
-.docker-section {
-    margin-top: 2.5rem;
-    padding-top: 2rem;
-    border-top: 1px solid var(--border-color);
+/* Docker nav button in top-bar */
+.docker-nav-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 32px;
+    font-size: 1.15rem;
+    text-decoration: none;
+    border-radius: 6px;
+    transition: background-color 200ms ease;
 }
-.docker-header {
+.docker-nav-btn:hover {
+    background-color: var(--code-bg);
+}
+
+/* Docker dashboard page */
+.docker-dashboard {
+    max-width: 640px;
+    margin: 0 auto;
+    padding: 3rem 1.4rem 4rem;
+}
+.docker-dashboard-header {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    margin-bottom: 1rem;
+    margin-bottom: 1.5rem;
 }
-.docker-section-title {
+.docker-dashboard-title {
     font-family: var(--font-heading);
-    font-size: 1.1rem;
+    font-size: 1.6rem;
     font-weight: 700;
     color: var(--text);
-    letter-spacing: 0.02em;
-    text-transform: uppercase;
 }
 .docker-refresh {
     width: 32px;

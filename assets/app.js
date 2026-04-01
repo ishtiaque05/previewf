@@ -936,22 +936,30 @@
 
 })();
 
-// --- Docker container discovery ---
+// --- Docker: nav button visibility + dashboard ---
 (function() {
-    var section = document.getElementById('docker-section');
+    var navBtn = document.getElementById('docker-nav-btn');
     var list = document.getElementById('docker-list');
     var refreshBtn = document.getElementById('docker-refresh');
     var searchInput = document.getElementById('docker-search');
 
-    if (!section || !list) return;
+    // On non-dashboard pages, just probe Docker availability and show the nav button
+    if (!list) {
+        if (navBtn) {
+            fetch('/api/docker/containers')
+                .then(function(r) { if (r.ok) navBtn.style.display = ''; })
+                .catch(function() {});
+        }
+        return;
+    }
 
+    // --- Dashboard page logic ---
     var allContainers = [];
 
     function clearChildren(el) {
         while (el.firstChild) el.removeChild(el.firstChild);
     }
 
-    /** Extract a short, human-readable status like "Up 2 hours" → "running" */
     function shortStatus(status) {
         if (/^Up /i.test(status)) return 'running';
         if (/^Exited /i.test(status)) return 'exited';
@@ -974,7 +982,6 @@
             card.className = 'docker-card';
             card.href = '/docker/' + encodeURIComponent(c.name);
 
-            // Top row: icon + name + status badge
             var top = document.createElement('div');
             top.className = 'docker-card-top';
 
@@ -995,7 +1002,6 @@
 
             card.appendChild(top);
 
-            // Meta row: image + workdir
             var meta = document.createElement('div');
             meta.className = 'docker-card-meta';
 
@@ -1049,11 +1055,14 @@
             })
             .then(function(data) {
                 allContainers = data;
-                section.style.display = '';
                 filterContainers();
             })
             .catch(function() {
-                section.style.display = 'none';
+                clearChildren(list);
+                var err = document.createElement('p');
+                err.className = 'docker-empty';
+                err.textContent = 'Could not connect to Docker.';
+                list.appendChild(err);
             });
     }
 

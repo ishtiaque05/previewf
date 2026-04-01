@@ -226,6 +226,7 @@ fn create_router_with_reload(
     // Docker routes are only registered when explicitly enabled via --docker
     if docker_available {
         router = router
+            .route("/docker", get(docker_dashboard_handler))
             .route("/api/docker/containers", get(docker_containers_handler))
             .route("/docker/{container}", get(docker_index_handler))
             .route(
@@ -1137,6 +1138,15 @@ async fn get_docker_source(
     );
     sources.insert(container.to_string(), Arc::clone(&source));
     Ok(source)
+}
+
+/// `GET /docker` — dedicated Docker dashboard page.
+async fn docker_dashboard_handler() -> Response {
+    let template = Assets::get("docker.html")
+        .map(|f| String::from_utf8_lossy(&f.data).into_owned())
+        .unwrap_or_else(|| "<html><body>Template missing</body></html>".to_string());
+
+    Html(template).into_response()
 }
 
 /// `GET /api/docker/containers` — list running Docker containers as JSON.
