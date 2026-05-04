@@ -226,6 +226,7 @@ fn create_router_with_reload(
     // Docker routes are only registered when explicitly enabled via --docker
     if docker_available {
         router = router
+            .route("/docker", get(docker_dashboard_handler))
             .route("/api/docker/containers", get(docker_containers_handler))
             .route("/docker/{container}", get(docker_index_handler))
             .route(
@@ -1129,12 +1130,23 @@ async fn get_docker_source(
     if let Some(source) = sources.get(container) {
         return Ok(Arc::clone(source));
     }
+    // Use the container's configured WorkingDir as the base path
+    let workdir = docker::get_container_workdir(container).await;
     let source = Arc::new(
-        DockerSource::new(container.to_string(), "/".to_string())
+        DockerSource::new(container.to_string(), workdir)
             .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()).into_response())?,
     );
     sources.insert(container.to_string(), Arc::clone(&source));
     Ok(source)
+}
+
+/// `GET /docker` — dedicated Docker dashboard page.
+async fn docker_dashboard_handler() -> Response {
+    let template = Assets::get("docker.html")
+        .map(|f| String::from_utf8_lossy(&f.data).into_owned())
+        .unwrap_or_else(|| "<html><body>Template missing</body></html>".to_string());
+
+    Html(template).into_response()
 }
 
 /// `GET /api/docker/containers` — list running Docker containers as JSON.
@@ -1172,6 +1184,12 @@ async fn docker_browse_handler(
     docker_listing_response(&state, &container, &dirpath).await
 }
 
+/// System directories to hide when browsing a container root.
+const SYSTEM_DIRS: &[&str] = &[
+    "bin", "boot", "dev", "etc", "lib", "lib32", "lib64", "libx32", "media", "mnt", "opt", "proc",
+    "root", "run", "sbin", "srv", "sys", "tmp", "usr", "var",
+];
+
 /// Shared listing logic for Docker container browsing.
 async fn docker_listing_response(state: &AppState, container: &str, subpath: &str) -> Response {
     let source = match get_docker_source(state, container).await {
@@ -1186,6 +1204,10 @@ async fn docker_listing_response(state: &AppState, container: &str, subpath: &st
 
     let breadcrumb_html = build_docker_breadcrumbs(container, subpath);
 
+    // When browsing the root of a container whose workdir is "/", hide system dirs
+    let is_root = subpath.is_empty();
+    let hide_system = is_root && source.display_root().ends_with(":/");
+
     let mut dirs: Vec<String> = Vec::new();
     let mut md_files: Vec<(String, usize)> = Vec::new();
     let mut json_files: Vec<String> = Vec::new();
@@ -1196,6 +1218,9 @@ async fn docker_listing_response(state: &AppState, container: &str, subpath: &st
             let name = entry.name;
             match entry.entry_type {
                 EntryType::Directory => {
+                    if hide_system && SYSTEM_DIRS.contains(&name.as_str()) {
+                        continue;
+                    }
                     dirs.push(name);
                 }
                 EntryType::File => {

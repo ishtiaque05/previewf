@@ -9,6 +9,7 @@ pub struct ContainerInfo {
     pub name: String,
     pub image: String,
     pub status: String,
+    pub workdir: String,
 }
 
 pub fn parse_container_list(output: &str) -> Vec<ContainerInfo> {
@@ -23,12 +24,33 @@ pub fn parse_container_list(output: &str) -> Vec<ContainerInfo> {
                     name: parts[1].to_string(),
                     image: parts[2].to_string(),
                     status: parts[3].to_string(),
+                    workdir: "/".to_string(),
                 })
             } else {
                 None
             }
         })
         .collect()
+}
+
+/// Get the configured `WorkingDir` for a container via `docker inspect`.
+pub async fn get_container_workdir(name: &str) -> String {
+    let output = Command::new("docker")
+        .args(["inspect", "--format", "{{.Config.WorkingDir}}", name])
+        .output()
+        .await;
+
+    match output {
+        Ok(o) if o.status.success() => {
+            let dir = String::from_utf8_lossy(&o.stdout).trim().to_string();
+            if dir.is_empty() {
+                "/".to_string()
+            } else {
+                dir
+            }
+        }
+        _ => "/".to_string(),
+    }
 }
 
 pub fn validate_container_name(name: &str) -> Result<(), PreviewError> {
@@ -87,7 +109,14 @@ pub async fn list_containers() -> Result<Vec<ContainerInfo>, PreviewError> {
     }
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    Ok(parse_container_list(&stdout))
+    let mut containers = parse_container_list(&stdout);
+
+    // Enrich each container with its WorkingDir from docker inspect
+    for c in &mut containers {
+        c.workdir = get_container_workdir(&c.name).await;
+    }
+
+    Ok(containers)
 }
 
 pub async fn validate_container(name: &str) -> Result<(), PreviewError> {
